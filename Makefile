@@ -81,3 +81,21 @@ doks-deploy: ## Create the pull secret and apply the DOKS overlay
 
 doks-undeploy: ## Remove the app from DOKS (leaves ingress-nginx in place)
 	kubectl delete -k k8s/overlays/doks --ignore-not-found
+
+# Detected at run time so a changed home IP is picked up automatically.
+# Override explicitly with: make doks-allow-ip ALLOW_CIDR=203.0.113.7/32
+ALLOW_CIDR ?= $(shell curl -4 -sS https://api.ipify.org)/32
+
+doks-allow-ip: ## Restrict the load balancer to ALLOW_CIDR (defaults to your current IP)
+	@echo "Restricting load balancer to $(ALLOW_CIDR)"
+	kubectl -n ingress-nginx patch svc ingress-nginx-controller --type merge \
+		-p '{"spec":{"loadBalancerSourceRanges":["$(ALLOW_CIDR)"]}}'
+	@echo "DigitalOcean takes ~30s to apply the firewall rule."
+
+doks-open: ## Remove the IP restriction and expose the app to the internet again
+	kubectl -n ingress-nginx patch svc ingress-nginx-controller --type json \
+		-p '[{"op":"remove","path":"/spec/loadBalancerSourceRanges"}]'
+
+doks-show-firewall: ## Print the load balancer's active firewall rules
+	@kubectl -n ingress-nginx get svc ingress-nginx-controller \
+		-o jsonpath='{.spec.loadBalancerSourceRanges}{"\n"}'

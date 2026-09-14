@@ -154,6 +154,41 @@ This cluster runs Cilium, so the NetworkPolicies are enforced rather than
 merely stored. A pod in the namespace that is neither the frontend nor the
 ingress controller times out when it tries to reach the backend.
 
+### Restricting the public endpoint to your IP
+
+The deployment is currently locked to a single source IP so the internet at
+large cannot reach it:
+
+```bash
+make doks-allow-ip                          # uses your current public IPv4
+make doks-allow-ip ALLOW_CIDR=203.0.113.0/24  # or an explicit range
+make doks-show-firewall                     # what is allowed today
+make doks-open                              # go public again
+```
+
+This sets `spec.loadBalancerSourceRanges` on the `ingress-nginx-controller`
+Service. DigitalOcean's cloud controller turns that into a firewall rule on
+the load balancer itself, so unwanted traffic is dropped at DO's edge and
+never reaches the cluster, the ingress controller, or the pods. Verify with:
+
+```bash
+doctl compute load-balancer get <lb-id> -o json | jq '.[0].firewall'
+# {"allow": ["cidr:76.17.107.15/32"]}
+```
+
+Two caveats. The rule pins one IPv4 address, so a residential IP that rotates
+will lock you out — rerun `make doks-allow-ip` to refresh it. And the rule is
+applied to the load balancer Service, which comes from the upstream
+ingress-nginx manifest rather than this repo, so reinstalling the controller
+resets it to fully public.
+
+An in-cluster alternative is the
+`nginx.ingress.kubernetes.io/whitelist-source-range` annotation on the
+Ingress. It works because the network load balancer preserves the client IP,
+but it filters after traffic has already reached the cluster and answers
+with 403 rather than dropping the connection, so it is the weaker control
+of the two.
+
 ## API
 
 Base path `/api`. Errors return `{"error":{"code","message","details"}}`.
