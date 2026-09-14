@@ -1,0 +1,184 @@
+# CineBook — Movie Ticket Booking System
+
+A movie ticket booking application built as **two independent services** that are
+developed, containerized, deployed and scaled separately.
+
+| Service | Stack | Container port | Image |
+| --- | --- | --- | --- |
+| `mtb-frontend` | React 18, TypeScript, Vite, nginx | 8080 | `mtb-frontend` |
+| `mtb-backend` | Node 22, Express, TypeScript, Zod | 4000 | `mtb-backend` |
+
+The browser only ever talks to the frontend origin. nginx forwards `/api` to the
+backend Service over cluster DNS, so there is no CORS configuration to manage
+and the backend is never exposed directly to the internet.
+
+```
+                ┌──────────────┐        /api        ┌─────────────┐
+  Browser ─────▶│ mtb-frontend │ ─────────────────▶ │ mtb-backend │
+                │   (nginx)    │   ClusterIP:4000   │  (Express)  │
+                └──────────────┘                    └─────────────┘
+                     Service                            Service
+                  ClusterIP:80                       ClusterIP:4000
+```
+
+## Features
+
+- Browse and search the film catalogue
+- Showtimes grouped by day across multiple theaters and screens
+- Interactive seat map with standard / premium / recliner pricing tiers
+- Booking with server-side validation and conflict detection on taken seats
+- Short-lived seat holds so seats are reserved during checkout
+- Booking lookup by reference or email, plus cancellation
+- `/api/stats` counters for dashboards
+
+## Repository layout
+
+```
+backend/           Express API (TypeScript)
+  src/routes/      HTTP layer
+  src/lib/store.ts Booking domain logic and in-memory persistence
+  src/data/seed.ts Films, theaters and generated showtimes
+frontend/          React single-page app
+  src/pages/       Films, showtimes, seat picker, confirmation, bookings
+  nginx/           Runtime nginx template and resolver hook
+k8s/base/          Namespace, both services, ingress, network policies
+k8s/overlays/dev   Local cluster: single replicas, no HPA/PDB
+k8s/overlays/prod  Registry images, 3 web replicas, real hostname
+k8s/optional/      Backend HPA (see the scaling note below)
+```
+
+## Run locally
+
+Two terminals, hot reload on both sides:
+
+```bash
+make install
+cd backend  && npm run dev      # http://localhost:4000
+cd frontend && npm run dev      # http://localhost:5173
+```
+
+Vite proxies `/api` to `localhost:4000`, matching what nginx does in production.
+
+## Run as containers
+
+```bash
+make compose-up                 # http://localhost:8080
+make compose-down
+```
+
+## Deploy to Kubernetes
+
+```bash
+make deploy                     # builds images, applies k8s/overlays/dev
+make status
+make forward                    # http://localhost:8080
+```
+
+`make deploy` assumes the cluster can see locally built images, which is true
+for OrbStack and Docker Desktop. On kind or minikube, load them first:
+
+```bash
+kind load docker-image mtb-backend:local mtb-frontend:local
+minikube image load mtb-backend:local && minikube image load mtb-frontend:local
+```
+
+To reach it through an Ingress controller instead of port-forwarding, add
+`127.0.0.1 movies.localhost` to `/etc/hosts` and browse to
+`http://movies.localhost`.
+
+For a real environment, push images and apply the prod overlay:
+
+```bash
+make images push TAG=1.0.0 REGISTRY=ghcr.io/<you>
+kubectl apply -k k8s/overlays/prod
+```
+
+Remove everything with `make undeploy`.
+
+## API
+
+Base path `/api`. Errors return `{"error":{"code","message","details"}}`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/movies?search=&genre=` | List films |
+| `GET` | `/movies/:id` | Film plus its upcoming showtimes |
+| `GET` | `/theaters` | List theaters |
+| `GET` | `/shows?movieId=&date=` | List showtimes |
+| `GET` | `/shows/:id/seats` | Seat map with live availability and pricing |
+| `POST` | `/holds` | Reserve seats during checkout |
+| `DELETE` | `/holds/:id` | Release a hold |
+| `POST` | `/bookings` | Create a booking |
+| `GET` | `/bookings?email=` | List bookings for an email |
+| `GET` | `/bookings/:reference` | Booking with show, film and theater |
+| `DELETE` | `/bookings/:reference` | Cancel a booking |
+| `GET` | `/stats` | Aggregate counters |
+
+`GET /healthz` (liveness) and `GET /readyz` (readiness) sit outside `/api`.
+
+Book three seats:
+
+```bash
+curl -X POST http://localhost:8080/api/bookings \
+  -H 'Content-Type: application/json' \
+  -d '{"showId":"show-mov-interstellar-0-0","seatIds":["C4","C5","C6"],
+       "customerName":"Grace Hopper","email":"grace@example.com"}'
+```
+
+Requesting a seat that is already taken returns `409 SEATS_UNAVAILABLE` and
+names the conflicting seats.
+
+## Configuration
+
+Backend (`mtb-backend-config`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PORT` | `4000` | Listen port |
+| `CORS_ORIGIN` | `*` | Comma-separated allowed origins |
+| `SEAT_HOLD_TTL_MS` | `300000` | How long a checkout hold lasts |
+| `MAX_SEATS_PER_BOOKING` | `10` | Per-booking seat cap |
+| `SHUTDOWN_TIMEOUT_MS` | `10000` | Grace period before a forced exit |
+
+Frontend (`mtb-frontend-config`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BACKEND_URL` | `http://mtb-backend.movie-booking.svc.cluster.local:4000` | Proxy target for `/api` |
+
+## Production readiness
+
+Both Deployments run as non-root with a read-only root filesystem, all
+capabilities dropped, `RuntimeDefault` seccomp and no service account token
+mounted; the namespace enforces the `restricted` Pod Security Standard.
+Each has startup, liveness and readiness probes, resource requests and limits,
+and a rolling update with `maxUnavailable: 0`.
+
+Shutdown is handled on both sides: the backend fails `/readyz` on `SIGTERM`
+before closing the listener, and the frontend sleeps through endpoint removal
+before `nginx -s quit`, so neither drops in-flight requests during a rollout.
+
+nginx resolves the backend at request time using the cluster resolver it reads
+from `/etc/resolv.conf` at startup, so a frontend pod starts cleanly even when
+the backend has no ready endpoints yet.
+
+NetworkPolicies default-deny ingress in the namespace and allow only
+frontend → backend and ingress-controller → both. They need a CNI that enforces
+policy (Calico, Cilium); other clusters store them without effect.
+
+### Scaling: read this before raising backend replicas
+
+The backend keeps bookings in an **in-memory store**, so every replica owns a
+separate set of seats and bookings. Two replicas would let a customer book a
+seat on one pod and get a 404 for that reference on the other. That is why
+`k8s/base/backend.yaml` pins `replicas: 1` and the backend HPA is parked in
+`k8s/optional/` rather than the base kustomization.
+
+To scale the API horizontally, replace `Store` in `backend/src/lib/store.ts`
+with a database-backed implementation — Postgres with a unique index on
+`(show_id, seat_id)` and the seat check plus insert inside one transaction —
+then raise `replicas` and apply `k8s/optional/backend-hpa.yaml`. The class is
+deliberately the only place that touches state, so nothing else has to change.
+
+The frontend has no such constraint: it is stateless and ships with an HPA
+(2–6 replicas on 75% CPU) and a PodDisruptionBudget in the base manifests.

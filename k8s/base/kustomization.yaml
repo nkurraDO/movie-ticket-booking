@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: movie-booking
+
+# includeSelectors stays false: Deployment selectors are immutable, so folding
+# these labels into them would break every future apply.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: movie-ticket-booking
+      app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - namespace.yaml
+  - backend.yaml
+  - frontend.yaml
+  - ingress.yaml
+  - networkpolicy.yaml
+
+images:
+  - name: mtb-backend
+    newTag: local
+  - name: mtb-frontend
+    newTag: local

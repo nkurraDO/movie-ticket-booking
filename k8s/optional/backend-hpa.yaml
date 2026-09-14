@@ -1,0 +1,30 @@
+# NOT part of the base kustomization, and applying it as-is will corrupt data.
+#
+# The reference backend stores bookings in memory, so each replica owns its own
+# seat inventory. Enable this only after moving the store behind a shared
+# datastore (Postgres with a unique index on (show_id, seat_id), or Redis), at
+# which point you should also raise `replicas` in k8s/base/backend.yaml.
+#
+#   kubectl apply -f k8s/optional/backend-hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mtb-backend
+  namespace: movie-booking
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mtb-backend
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300

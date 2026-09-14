@@ -1,0 +1,15 @@
+#!/bin/sh
+# Sourced by the nginx entrypoint (".envsh" files are sourced, so exports stick)
+# before the template is rendered.
+#
+# nginx cannot read /etc/resolv.conf itself, but it needs a resolver to look up
+# the backend Service at request time. Lift the first nameserver the platform
+# gave us -- kube-dns in Kubernetes, 127.0.0.11 under Docker Compose.
+
+if [ -z "${DNS_RESOLVER}" ]; then
+  DNS_RESOLVER="$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf 2>/dev/null)"
+  [ -z "${DNS_RESOLVER}" ] && DNS_RESOLVER="127.0.0.11"
+  export DNS_RESOLVER
+fi
+
+echo "[resolver] using DNS resolver ${DNS_RESOLVER} and backend ${BACKEND_URL}"

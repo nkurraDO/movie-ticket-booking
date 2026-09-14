@@ -1,0 +1,47 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: movie-booking
+
+resources:
+  - ../../base
+
+# Point these at your registry and pin an immutable tag (or a digest) per
+# release so a rollback is always reproducible.
+images:
+  - name: mtb-backend
+    newName: ghcr.io/nkurrado/mtb-backend
+    newTag: "1.0.0"
+  - name: mtb-frontend
+    newName: ghcr.io/nkurrado/mtb-frontend
+    newTag: "1.0.0"
+
+patches:
+  - target:
+      kind: Deployment
+      name: mtb-frontend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+      # Hard requirement in prod: never co-schedule all web pods on one node.
+      - op: replace
+        path: /spec/template/spec/topologySpreadConstraints/0/whenUnsatisfiable
+        value: DoNotSchedule
+  - target:
+      kind: Deployment
+      name: mtb-backend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+  - target:
+      kind: Ingress
+      name: movie-booking
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: movies.example.com

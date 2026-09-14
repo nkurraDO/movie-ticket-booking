@@ -1,0 +1,188 @@
+# ---------------------------------------------------------------------------
+# Frontend service: nginx serving the built React app and proxying /api to the
+# backend Service. Stateless, so it scales horizontally without constraints.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mtb-frontend
+  namespace: movie-booking
+  labels:
+    app.kubernetes.io/name: mtb-frontend
+    app.kubernetes.io/component: frontend
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mtb-frontend-config
+  namespace: movie-booking
+  labels:
+    app.kubernetes.io/name: mtb-frontend
+    app.kubernetes.io/component: frontend
+data:
+  # Cluster DNS name of the backend Service. This is the only coupling
+  # between the two services.
+  BACKEND_URL: http://mtb-backend.movie-booking.svc.cluster.local:4000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mtb-frontend
+  namespace: movie-booking
+  labels:
+    app.kubernetes.io/name: mtb-frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: movie-ticket-booking
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mtb-frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mtb-frontend
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: movie-ticket-booking
+    spec:
+      serviceAccountName: mtb-frontend
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: mtb-frontend
+      containers:
+        - name: web
+          image: mtb-frontend:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: mtb-frontend-config
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 15
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              exec:
+                # Keep serving while the endpoint removal propagates, then let
+                # nginx finish in-flight requests instead of dropping them.
+                command: ["/bin/sh", "-c", "sleep 5 && /usr/sbin/nginx -s quit"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # nginx renders its config from the template and writes caches and
+            # its pid file at startup, all of which need writable paths.
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-conf
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mtb-frontend
+  namespace: movie-booking
+  labels:
+    app.kubernetes.io/name: mtb-frontend
+    app.kubernetes.io/component: frontend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mtb-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mtb-frontend
+  namespace: movie-booking
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mtb-frontend
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mtb-frontend
+  namespace: movie-booking
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mtb-frontend
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
