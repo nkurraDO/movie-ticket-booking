@@ -44,6 +44,7 @@ frontend/          React single-page app
 k8s/base/          Namespace, both services, ingress, network policies
 k8s/overlays/dev   Local cluster: single replicas, no HPA/PDB
 k8s/overlays/prod  Registry images, 3 web replicas, real hostname
+k8s/overlays/doks  DigitalOcean Kubernetes with images in DOCR
 k8s/optional/      Backend HPA (see the scaling note below)
 ```
 
@@ -86,7 +87,8 @@ To reach it through an Ingress controller instead of port-forwarding, add
 `127.0.0.1 movies.localhost` to `/etc/hosts` and browse to
 `http://movies.localhost`.
 
-For a real environment, push images and apply the prod overlay:
+For a generic registry-backed environment, push images and apply the prod
+overlay:
 
 ```bash
 make images push TAG=1.0.0 REGISTRY=ghcr.io/<you>
@@ -94,6 +96,63 @@ kubectl apply -k k8s/overlays/prod
 ```
 
 Remove everything with `make undeploy`.
+
+## Deploy to DigitalOcean Kubernetes
+
+The `doks` overlay targets DOKS with images in DigitalOcean Container Registry.
+It is currently deployed to the `do-atl1-managed-agent-demo2` cluster.
+
+```bash
+export KUBECONFIG=~/Desktop/K8sconfigs/managed-agent-demo2-kubeconfig.yaml
+make doks-images            # cross-build linux/amd64 and push to DOCR
+make doks-deploy            # pull secret + apply the doks overlay
+```
+
+Four things differ from a local cluster, and each one bites if missed:
+
+**Build for the cluster's architecture.** DOKS nodes are `amd64`. An image
+built on an Apple Silicon Mac is `arm64` and crash-loops with an exec format
+error, so the Makefile passes `--platform linux/amd64` to `docker buildx`.
+
+**One repository, two tags.** The DOCR Starter tier permits a single
+repository, so both services share `movie-ticket-booking` and are
+distinguished by tag (`backend-1.0.0`, `frontend-1.0.0`) instead of by
+repository name. On Basic or above, switch the overlay to separate
+`mtb-backend` and `mtb-frontend` repositories.
+
+**Pull credentials go on the pod spec.** DOKS can inject registry credentials
+into a namespace's *default* ServiceAccount, but these pods run under their own
+ServiceAccounts, so the overlay attaches `imagePullSecrets` directly. Create the
+secret first — `doctl` names it `registry-<registry-name>`:
+
+```bash
+doctl registry kubernetes-manifest --namespace movie-booking | kubectl apply -f -
+```
+
+**Proxy protocol must be turned off.** DigitalOcean now provisions
+`REGIONAL_NETWORK` (layer 4 passthrough) load balancers, which do not send
+PROXY-protocol headers, but the upstream ingress-nginx manifest for DO still
+configures nginx to expect them. The mismatch makes every request return an
+empty reply. After installing the controller:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.15.1/deploy/static/provider/do/deploy.yaml
+kubectl -n ingress-nginx patch cm ingress-nginx-controller \
+  --type merge -p '{"data":{"use-proxy-protocol":"false"}}'
+kubectl -n ingress-nginx annotate svc ingress-nginx-controller \
+  service.beta.kubernetes.io/do-loadbalancer-enable-proxy-protocol="false" --overwrite
+```
+
+The client IP is still preserved: the network load balancer passes it through
+and the Service uses `externalTrafficPolicy: Local`.
+
+The overlay strips the Ingress `host` so the app answers on the load balancer
+IP directly. Once DNS points at that IP, put the hostname back and add
+cert-manager for TLS.
+
+This cluster runs Cilium, so the NetworkPolicies are enforced rather than
+merely stored. A pod in the namespace that is neither the frontend nor the
+ingress controller times out when it tries to reach the backend.
 
 ## API
 

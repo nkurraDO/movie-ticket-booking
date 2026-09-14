@@ -4,8 +4,11 @@ NAMESPACE   ?= movie-booking
 BACKEND_IMG  = mtb-backend:$(TAG)
 FRONTEND_IMG = mtb-frontend:$(TAG)
 
+DOCR_REPO ?= registry.digitalocean.com/managed-agents-demo/movie-ticket-booking
+
 .PHONY: help install dev build images compose-up compose-down \
-        deploy undeploy status logs forward render push
+        deploy undeploy status logs forward render push \
+        doks-images doks-deploy doks-undeploy
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -58,3 +61,23 @@ logs: ## Tail backend logs
 
 forward: ## Forward the frontend Service to http://localhost:8080
 	kubectl -n $(NAMESPACE) port-forward svc/mtb-frontend 8080:80
+
+# --------------------------------------------------------------------- DOKS
+
+doks-images: ## Cross-build linux/amd64 images and push them to DOCR
+	doctl registry login
+	docker buildx build --platform linux/amd64 -t "$(DOCR_REPO):backend-1.0.0"  --push ./backend
+	docker buildx build --platform linux/amd64 -t "$(DOCR_REPO):frontend-1.0.0" --push ./frontend
+
+doks-deploy: ## Create the pull secret and apply the DOKS overlay
+	kubectl apply -f k8s/base/namespace.yaml
+	doctl registry kubernetes-manifest --namespace $(NAMESPACE) | kubectl apply -f -
+	kubectl apply -k k8s/overlays/doks
+	kubectl -n $(NAMESPACE) rollout status deploy/mtb-backend
+	kubectl -n $(NAMESPACE) rollout status deploy/mtb-frontend
+	@echo "Load balancer IP:"
+	@kubectl -n ingress-nginx get svc ingress-nginx-controller \
+		-o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
+
+doks-undeploy: ## Remove the app from DOKS (leaves ingress-nginx in place)
+	kubectl delete -k k8s/overlays/doks --ignore-not-found
