@@ -45,12 +45,26 @@ patches:
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
 
+  # Cut over to the v2 backend rollout.
+  - target:
+      kind: ConfigMap
+      name: mtb-frontend-config
+    patch: |-
+      - op: replace
+        path: /data/BACKEND_URL
+        value: http://mtb-backend-v2.movie-booking.svc.cluster.local:4000
+
   # No DNS name is pointed at the Load Balancer yet, so serve every host and
   # reach the app on the Load Balancer's public IP. Set a host here once DNS
   # exists, which is also what makes TLS via cert-manager possible.
+  #
+  # The separate /api route is dropped so the frontend owns API proxying on a
+  # single path, instead of the Ingress and nginx each having a say.
   - target:
       kind: Ingress
       name: movie-booking
     patch: |-
       - op: remove
         path: /spec/rules/0/host
+      - op: remove
+        path: /spec/rules/0/http/paths/0
