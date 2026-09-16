@@ -61,8 +61,20 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Validate rendered manifests against the cluster API schema
+      # kubeconform validates against published Kubernetes JSON schemas, so it
+      # needs no cluster. `kubectl apply --dry-run=client --validate=strict`
+      # looks offline but still downloads the OpenAPI schema from an API
+      # server, which this job has no credentials for by design.
+      - name: Install kubeconform
         run: |
-          kubectl kustomize k8s/overlays/doks \
-            | kubectl apply --dry-run=client --validate=strict -f - > /dev/null
-          echo "manifests are structurally valid"
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+
+      - name: Validate manifests against Kubernetes schemas
+        run: |
+          for overlay in k8s/overlays/*/; do
+            echo "validating ${overlay}"
+            kubectl kustomize "${overlay}" \
+              | kubeconform -strict -summary -ignore-missing-schemas -
+          done
