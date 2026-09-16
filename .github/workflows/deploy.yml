@@ -31,13 +31,12 @@ jobs:
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
-      # DOCR accepts the API token as both username and password.
+      # Exchanges the API token for short-lived read/write registry
+      # credentials. Preferred over passing the raw token to docker login,
+      # because this path is governed by the registry:read scope and so works
+      # with a least-privilege custom-scoped token.
       - name: Log in to DigitalOcean Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: registry.digitalocean.com
-          username: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-          password: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: doctl registry login --expiry-seconds 1800
 
       - uses: docker/setup-buildx-action@v3
 
