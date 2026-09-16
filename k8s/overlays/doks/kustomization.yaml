@@ -45,14 +45,16 @@ patches:
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
 
-  # Cut over to the v2 backend rollout.
+  # Keep the frontend proxy pointed at the backend Service deployed by this
+  # overlay. The Ingress sends /api traffic to the frontend, so this value is
+  # the path all public API requests use to reach the backend.
   - target:
       kind: ConfigMap
       name: mtb-frontend-config
     patch: |-
       - op: replace
         path: /data/BACKEND_URL
-        value: http://mtb-backend-v2.movie-booking.svc.cluster.local:4000
+        value: http://mtb-backend.movie-booking.svc.cluster.local:4000
 
   # No DNS name is pointed at the Load Balancer yet, so serve every host and
   # reach the app on the Load Balancer's public IP. Set a host here once DNS
