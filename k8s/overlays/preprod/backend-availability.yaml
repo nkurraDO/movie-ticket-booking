@@ -1,0 +1,52 @@
+# The frontend already runs behind a HorizontalPodAutoscaler and a
+# PodDisruptionBudget (k8s/base/frontend.yaml). The backend has neither, so it
+# sits on a single pod: a node drain, a rolling node upgrade or an eviction
+# takes the booking API down until the pod is rescheduled, and a
+# PodDisruptionBudget alone cannot help a workload that has nowhere to fail
+# over to.
+#
+# Applied to pre-production first so the autoscaler can be observed against a
+# real cluster and a real load balancer before production inherits it.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mtb-backend
+  namespace: movie-booking
+  labels:
+    app.kubernetes.io/name: mtb-backend
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: movie-ticket-booking
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mtb-backend
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      # Matches the frontend: settle for five minutes before giving capacity
+      # back, so a burst of checkout traffic does not thrash the pod count.
+      stabilizationWindowSeconds: 300
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mtb-backend
+  namespace: movie-booking
+  labels:
+    app.kubernetes.io/name: mtb-backend
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: movie-ticket-booking
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mtb-backend

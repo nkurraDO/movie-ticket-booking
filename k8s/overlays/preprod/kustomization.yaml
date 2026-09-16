@@ -7,6 +7,7 @@ namespace: movie-booking
 
 resources:
   - ../../base
+  - backend-availability.yaml
 
 # The DOCR Starter tier allows a single repository, so both services live in
 # one repository and are told apart by tag rather than by name.
