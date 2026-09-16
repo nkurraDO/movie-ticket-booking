@@ -173,7 +173,7 @@ never reaches the cluster, the ingress controller, or the pods. Verify with:
 
 ```bash
 doctl compute load-balancer get <lb-id> -o json | jq '.[0].firewall'
-# {"allow": ["cidr:76.17.107.15/32"]}
+# {"allow": ["cidr:203.0.113.10/32"]}
 ```
 
 Two caveats. The rule pins one IPv4 address, so a residential IP that rotates

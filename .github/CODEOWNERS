@@ -1,0 +1,4 @@
+# Every change requires review from the repository owner.
+# Combined with "Require review from Code Owners" in branch protection, this
+# makes @nkurraDO's approval specifically required, not just any approval.
+* @nkurraDO

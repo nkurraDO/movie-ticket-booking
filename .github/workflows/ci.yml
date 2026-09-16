@@ -1,0 +1,68 @@
+name: CI
+
+# Runs on every pull request. Deliberately has no cluster or registry
+# credentials so it is safe for pull requests from forks.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.service }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.service }}
+        run: npm ci
+
+      - name: Type-check and build
+        working-directory: ${{ matrix.service }}
+        run: npm run build
+
+      # Catches Dockerfile regressions before they can reach a deploy. Built
+      # for amd64 to match the cluster nodes, and not pushed anywhere.
+      - name: Build container image
+        run: docker build --platform linux/amd64 -t mtb-${{ matrix.service }}:ci ./${{ matrix.service }}
+
+  manifests:
+    name: manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+
+      # A broken overlay should fail here rather than halfway through a deploy.
+      - name: Render every overlay
+        run: |
+          for overlay in k8s/overlays/*/; do
+            echo "::group::${overlay}"
+            kubectl kustomize "${overlay}"
+            echo "::endgroup::"
+          done
+
+      - name: Validate rendered manifests against the cluster API schema
+        run: |
+          kubectl kustomize k8s/overlays/doks \
+            | kubectl apply --dry-run=client --validate=strict -f - > /dev/null
+          echo "manifests are structurally valid"
