@@ -50,6 +50,12 @@ k8s/optional/      Backend HPA (see the scaling note below)
 
 ## Run locally
 
+### Prerequisites
+
+- Node.js 20 or newer and npm
+- Docker Desktop, if you want to use the container or Kubernetes workflows
+- `kubectl` and a local Kubernetes cluster, if you want to deploy with `make deploy`
+
 Two terminals, hot reload on both sides:
 
 ```bash
