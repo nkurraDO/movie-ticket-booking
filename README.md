@@ -50,6 +50,10 @@ k8s/optional/      Backend HPA (see the scaling note below)
 
 ## Run locally
 
+Prerequisites: Node.js 22 or newer and npm. Docker is also required for the
+container workflow, while `kubectl` and a Kubernetes cluster are required for
+the deployment commands below.
+
 Two terminals, hot reload on both sides:
 
 ```bash
