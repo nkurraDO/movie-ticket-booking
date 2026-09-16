@@ -43,15 +43,13 @@ metadata:
 spec:
   # Deliberately one replica: the reference backend keeps bookings in an
   # in-memory store, so a second pod would hold a different set of seats and
-  # bookings. Point the API at Postgres/Redis before raising this or enabling
-  # the HorizontalPodAutoscaler in k8s/optional/backend-hpa.yaml.
+  # bookings. Recreate avoids exposing both stores during a rollout. Point
+  # the API at Postgres/Redis before raising this or enabling the
+  # HorizontalPodAutoscaler in k8s/optional/backend-hpa.yaml.
   replicas: 1
   revisionHistoryLimit: 5
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: mtb-backend

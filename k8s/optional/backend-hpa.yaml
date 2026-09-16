@@ -1,4 +1,6 @@
-# NOT part of the base kustomization, and applying it as-is will corrupt data.
+# NOT part of the base kustomization. The in-memory store requires one backend
+# replica; this manifest is retained only as a safe no-scale placeholder until
+# the store is moved behind shared persistence.
 #
 # The reference backend stores bookings in memory, so each replica owns its own
 # seat inventory. Enable this only after moving the store behind a shared
@@ -16,8 +18,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: mtb-backend
-  minReplicas: 2
-  maxReplicas: 8
+  minReplicas: 1
+  maxReplicas: 1
   metrics:
     - type: Resource
       resource:
