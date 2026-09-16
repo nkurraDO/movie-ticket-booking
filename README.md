@@ -45,6 +45,7 @@ k8s/base/          Namespace, both services, ingress, network policies
 k8s/overlays/dev   Local cluster: single replicas, no HPA/PDB
 k8s/overlays/prod  Registry images, 3 web replicas, real hostname
 k8s/overlays/doks  DigitalOcean Kubernetes with images in DOCR
+k8s/overlays/preprod  Pre-production DOKS cluster, kept in step with doks
 k8s/optional/      Backend HPA (see the scaling note below)
 ```
 
@@ -153,6 +154,30 @@ cert-manager for TLS.
 This cluster runs Cilium, so the NetworkPolicies are enforced rather than
 merely stored. A pod in the namespace that is neither the frontend nor the
 ingress controller times out when it tries to reach the backend.
+
+### Pre-production
+
+The `preprod` overlay targets a second DOKS cluster (`do-atl1-preprod`) built
+to the same shape as production: same region, same node size, same Kubernetes
+minor version, same ingress-nginx release and the same PROXY-protocol and
+source-range settings on its load balancer. It exists so that a change can be
+observed running before it reaches production.
+
+```bash
+kubectl --context do-atl1-preprod apply -k k8s/overlays/preprod
+```
+
+Keep the two overlays in step. The point of a pre-production environment is
+that it is a fair test, and every setting that differs is a way for a change to
+pass here and still fail in production. To see what currently differs:
+
+```bash
+diff <(kubectl kustomize k8s/overlays/preprod) <(kubectl kustomize k8s/overlays/doks)
+```
+
+Promote by deploying the same image tags, built once, to preprod first and to
+production only afterwards. Rebuilding per environment defeats the purpose,
+since the artifact tested is then not the artifact shipped.
 
 ### Restricting the public endpoint to your IP
 
