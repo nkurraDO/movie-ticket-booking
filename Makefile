@@ -4,7 +4,7 @@ NAMESPACE   ?= movie-booking
 BACKEND_IMG  = mtb-backend:$(TAG)
 FRONTEND_IMG = mtb-frontend:$(TAG)
 
-DOCR_REPO ?= registry.digitalocean.com/managed-agents-demo/movie-ticket-booking
+DOCR_REPO ?= registry.digitalocean.com/managed-agents-demo-v2/movie-ticket-booking
 
 .PHONY: help install dev build images compose-up compose-down \
         deploy undeploy status logs forward render push \
