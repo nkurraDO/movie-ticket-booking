@@ -27,7 +27,9 @@ data:
   LOG_FORMAT: combined
   # The frontend proxies same-origin, so cross-origin access is not required.
   CORS_ORIGIN: "*"
-  SEAT_HOLD_TTL_MS: "300000"
+  # Customers reported losing their seats while they were still entering
+  # payment details, so the checkout window is 10 minutes rather than 5.
+  SEAT_HOLD_TTL_MS: "10m"
   MAX_SEATS_PER_BOOKING: "10"
   SHUTDOWN_TIMEOUT_MS: "10000"
   BOOKING_LEDGER_PATH: /var/lib/movie-booking/bookings.ledger
