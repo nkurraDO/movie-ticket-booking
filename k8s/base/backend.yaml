@@ -31,7 +31,7 @@ data:
   MAX_SEATS_PER_BOOKING: "10"
   # Online sales stop 30 minutes before a show starts, so the box office can
   # seat walk-ins without both channels selling into the same room.
-  SALES_CUTOFF_MINUTES: "1800"
+  SALES_CUTOFF_MINUTES: "30"
   SHUTDOWN_TIMEOUT_MS: "10000"
   BOOKING_LEDGER_PATH: /var/lib/movie-booking/bookings.ledger
 ---
