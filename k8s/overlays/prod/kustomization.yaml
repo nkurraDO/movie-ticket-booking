@@ -39,6 +39,15 @@ patches:
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
   - target:
+      kind: HorizontalPodAutoscaler
+      name: mtb-frontend
+    patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: mtb-frontend
+  - target:
       kind: Ingress
       name: movie-booking
     patch: |-

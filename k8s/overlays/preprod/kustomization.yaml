@@ -46,6 +46,16 @@ patches:
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
 
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: mtb-frontend
+    patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: mtb-frontend
+
   # No DNS name is pointed at the Load Balancer yet, so serve every host and
   # reach the app on the Load Balancer's public IP. Set a host here once DNS
   # exists, which is also what makes TLS via cert-manager possible.
