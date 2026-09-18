@@ -35,6 +35,20 @@ const CLASS_MULTIPLIER: Record<SeatClass, number> = {
 };
 
 /**
+ * How many seat-map reads to keep for dispute handling. Support regularly
+ * fields "the seat picker showed it as free" complaints and has no way to see
+ * what a customer was actually served, so the most recent reads are retained.
+ */
+const MAX_AVAILABILITY_SNAPSHOTS = 500;
+
+/** What a single seat-map read returned, and when. */
+interface AvailabilitySnapshot {
+  at: string;
+  showId: string;
+  seats: Seat[];
+}
+
+/**
  * In-memory persistence layer.
  *
  * Every mutation runs synchronously, which on Node's single-threaded event loop
@@ -51,6 +65,8 @@ export class Store {
   private readonly holds = new Map<string, SeatHold>();
   /** showId -> seatId -> booking reference. The source of truth for occupancy. */
   private readonly occupancy = new Map<string, Map<string, string>>();
+  /** Rolling window of recent seat-map reads, newest last. */
+  private readonly availabilityLog: AvailabilitySnapshot[] = [];
 
   constructor() {
     for (const show of buildShows()) {
@@ -127,7 +143,29 @@ export class Store {
       }
     }
 
+    this.recordAvailability(showId, seats);
+
     return { show, movie: this.getMovie(show.movieId), theater, seats };
+  }
+
+  /**
+   * Records what this read returned, keeping only the most recent
+   * MAX_AVAILABILITY_SNAPSHOTS entries so the window stays bounded.
+   */
+  private recordAvailability(showId: string, seats: Seat[]): void {
+    this.availabilityLog.push({ at: new Date().toISOString(), showId, seats });
+
+    if (this.availabilityLog.length > MAX_AVAILABILITY_SNAPSHOTS) {
+      this.availabilityLog.slice(-MAX_AVAILABILITY_SNAPSHOTS);
+    }
+  }
+
+  /** The most recent seat-map reads, newest first, without the seat payloads. */
+  recentAvailabilityChecks(limit = 10): Array<{ at: string; showId: string }> {
+    return this.availabilityLog
+      .slice(-limit)
+      .reverse()
+      .map(({ at, showId }) => ({ at, showId }));
   }
 
   private activeHeldSeats(showId: string, ignoreHoldId?: string): Set<string> {
@@ -294,6 +332,7 @@ export class Store {
       seatsSold: confirmed.reduce((sum, b) => sum + b.seatIds.length, 0),
       revenueCents: confirmed.reduce((sum, b) => sum + b.totalCents, 0),
       activeHolds: this.holds.size,
+      recentAvailabilityChecks: this.recentAvailabilityChecks(),
     };
   }
 }
