@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { appendFile } from 'node:fs/promises';
 import { buildShows, movies, theaters } from '../data/seed.js';
 import type { Booking, Movie, Seat, SeatClass, SeatHold, Show, Theater } from '../types.js';
 
@@ -7,6 +8,13 @@ const HOLD_TTL_MS = Number(process.env.SEAT_HOLD_TTL_MS ?? 5 * 60 * 1000);
 
 /** Maximum seats a single booking may contain. */
 export const MAX_SEATS_PER_BOOKING = Number(process.env.MAX_SEATS_PER_BOOKING ?? 10);
+
+/**
+ * Append-only record of confirmed bookings. The in-memory store is lost
+ * whenever the process exits, so finance has no way to reconcile what was sold
+ * after a restart. Each confirmed booking is appended here first.
+ */
+const BOOKING_LEDGER_PATH = process.env.BOOKING_LEDGER_PATH ?? '/tmp/bookings.ledger';
 
 export class BookingError extends Error {
   constructor(
@@ -242,13 +250,13 @@ export class Store {
 
   // ----------------------------------------------------------------- bookings
 
-  book(input: {
+  async book(input: {
     showId: string;
     seatIds: string[];
     customerName: string;
     email: string;
     holdId?: string;
-  }): Booking {
+  }): Promise<Booking> {
     const show = this.getShow(input.showId);
 
     if (new Date(show.startsAt).getTime() <= Date.now()) {
@@ -277,6 +285,11 @@ export class Store {
       status: 'confirmed',
       createdAt: new Date().toISOString(),
     };
+
+    // Write ahead of the in-memory commit: if the process dies mid-booking,
+    // the ledger still shows what was sold, which is exactly what was missing
+    // the last time the API restarted under load.
+    await appendFile(BOOKING_LEDGER_PATH, `${JSON.stringify(booking)}\n`, 'utf8');
 
     const occupied = this.occupancy.get(input.showId)!;
     for (const seatId of input.seatIds) occupied.set(seatId, booking.reference);
