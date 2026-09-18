@@ -10,6 +10,15 @@ const HOLD_TTL_MS = Number(process.env.SEAT_HOLD_TTL_MS ?? 5 * 60 * 1000);
 export const MAX_SEATS_PER_BOOKING = Number(process.env.MAX_SEATS_PER_BOOKING ?? 10);
 
 /**
+ * How long before a show starts online sales close, in minutes.
+ *
+ * Walk-ins are seated from the box office in the last minutes before a show,
+ * so online sales have to stop early enough that the room can be settled
+ * without two channels selling the same seat. Zero disables the cutoff.
+ */
+const SALES_CUTOFF_MINUTES = Number(process.env.SALES_CUTOFF_MINUTES ?? 0);
+
+/**
  * Append-only record of confirmed bookings. The in-memory store is lost
  * whenever the process exits, so finance has no way to reconcile what was sold
  * after a restart. Each confirmed booking is appended here first.
@@ -269,9 +278,19 @@ export class Store {
     try {
       const show = this.getShow(input.showId);
 
-      if (new Date(show.startsAt).getTime() <= Date.now()) {
-        throw new BookingError('This show has already started', 409, 'SHOW_STARTED');
-      }
+        if (new Date(show.startsAt).getTime() <= Date.now()) {
+          throw new BookingError('This show has already started', 409, 'SHOW_STARTED');
+        }
+
+        const salesCloseAt =
+          new Date(show.startsAt).getTime() - SALES_CUTOFF_MINUTES * 60 * 1000;
+        if (Date.now() >= salesCloseAt) {
+          throw new BookingError(
+            'Online sales for this show have closed. Seats are available at the box office.',
+            409,
+            'SALES_CLOSED',
+          );
+        }
 
       const { seats } = this.getSeatMap(input.showId);
       const ownHeld = input.holdId

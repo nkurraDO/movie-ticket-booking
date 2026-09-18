@@ -279,6 +279,7 @@ Backend (`mtb-backend-config`):
 | `CORS_ORIGIN` | `*` | Comma-separated allowed origins |
 | `SEAT_HOLD_TTL_MS` | `300000` | How long a checkout hold lasts |
 | `MAX_SEATS_PER_BOOKING` | `10` | Per-booking seat cap |
+| `SALES_CUTOFF_MINUTES` | `0` | Minutes before showtime that online sales close (`0` disables) |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Grace period before a forced exit |
 
 Frontend (`mtb-frontend-config`):
