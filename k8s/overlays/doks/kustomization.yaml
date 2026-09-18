@@ -45,6 +45,19 @@ patches:
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
 
+  # Write the booking ledger to the node's audit path rather than the default
+  # under /tmp. /tmp is an emptyDir, so it is discarded whenever the container
+  # is replaced -- which is how the ledger for confirmed bookings was lost
+  # during the restarts in the availability-audit incident. Customer-facing
+  # sales records should outlive a single container.
+  - target:
+      kind: ConfigMap
+      name: mtb-backend-config
+    patch: |-
+      - op: add
+        path: /data/BOOKING_LEDGER_PATH
+        value: /var/audit/movie-booking/bookings.ledger
+
   # Keep the frontend proxy pointed at the backend Service deployed by this
   # overlay. The Ingress sends /api traffic to the frontend, so this value is
   # the path all public API requests use to reach the backend.
