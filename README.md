@@ -101,10 +101,10 @@ Remove everything with `make undeploy`.
 ## Deploy to DigitalOcean Kubernetes
 
 The `doks` overlay targets DOKS with images in DigitalOcean Container Registry.
-It is currently deployed to the `do-atl1-managed-agent-demo2` cluster.
+It is currently deployed to the `do-atl1-movie-booking-prod` cluster.
 
 ```bash
-export KUBECONFIG=~/Desktop/K8sconfigs/managed-agent-demo2-kubeconfig.yaml
+export KUBECONFIG=~/Desktop/K8sconfigs/newteam-kubeconfig.yaml
 make doks-images            # cross-build linux/amd64 and push to DOCR
 make doks-deploy            # pull secret + apply the doks overlay
 ```
@@ -157,14 +157,14 @@ ingress controller times out when it tries to reach the backend.
 
 ### Pre-production
 
-The `preprod` overlay targets a second DOKS cluster (`do-atl1-preprod`) built
+The `preprod` overlay targets a second DOKS cluster (`do-atl1-movie-booking-preprod`) built
 to the same shape as production: same region, same node size, same Kubernetes
 minor version, same ingress-nginx release and the same PROXY-protocol and
 source-range settings on its load balancer. It exists so that a change can be
 observed running before it reaches production.
 
 ```bash
-kubectl --context do-atl1-preprod apply -k k8s/overlays/preprod
+kubectl --context do-atl1-movie-booking-preprod apply -k k8s/overlays/preprod
 ```
 
 Keep the two overlays in step. The point of a pre-production environment is

@@ -11,10 +11,10 @@ resources:
 # one repository and are told apart by tag rather than by name.
 images:
   - name: mtb-backend
-    newName: registry.digitalocean.com/managed-agents-demo/movie-ticket-booking
+    newName: registry.digitalocean.com/managed-agents-demo-v2/movie-ticket-booking
     newTag: backend-1.0.0
   - name: mtb-frontend
-    newName: registry.digitalocean.com/managed-agents-demo/movie-ticket-booking
+    newName: registry.digitalocean.com/managed-agents-demo-v2/movie-ticket-booking
     newTag: frontend-1.0.0
 
 patches:
@@ -29,7 +29,7 @@ patches:
       - op: add
         path: /spec/template/spec/imagePullSecrets
         value:
-          - name: registry-managed-agents-demo
+          - name: registry-managed-agents-demo-v2
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
@@ -40,7 +40,7 @@ patches:
       - op: add
         path: /spec/template/spec/imagePullSecrets
         value:
-          - name: registry-managed-agents-demo
+          - name: registry-managed-agents-demo-v2
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
