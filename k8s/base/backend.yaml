@@ -30,6 +30,22 @@ data:
   SEAT_HOLD_TTL_MS: "300000"
   MAX_SEATS_PER_BOOKING: "10"
   SHUTDOWN_TIMEOUT_MS: "10000"
+  BOOKING_LEDGER_PATH: /var/lib/movie-booking/bookings.ledger
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mtb-booking-ledger
+  namespace: movie-booking
+  labels:
+    app.kubernetes.io/name: mtb-backend
+    app.kubernetes.io/component: backend
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -132,9 +148,14 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: booking-ledger
+              mountPath: /var/lib/movie-booking
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: booking-ledger
+          persistentVolumeClaim:
+            claimName: mtb-booking-ledger
 ---
 apiVersion: v1
 kind: Service
