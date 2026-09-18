@@ -75,6 +75,7 @@ export class Store {
   private readonly occupancy = new Map<string, Map<string, string>>();
   /** Rolling window of recent seat-map reads, newest last. */
   private readonly availabilityLog: AvailabilitySnapshot[] = [];
+  private bookingQueue: Promise<void> = Promise.resolve();
 
   constructor() {
     for (const show of buildShows()) {
@@ -257,46 +258,54 @@ export class Store {
     email: string;
     holdId?: string;
   }): Promise<Booking> {
-    const show = this.getShow(input.showId);
+    let resolveTurn!: () => void;
+    const turn = new Promise<void>((resolve) => {
+      resolveTurn = resolve;
+    });
+    const previous = this.bookingQueue;
+    this.bookingQueue = previous.then(() => turn);
+    await previous;
 
-    if (new Date(show.startsAt).getTime() <= Date.now()) {
-      throw new BookingError('This show has already started', 409, 'SHOW_STARTED');
+    try {
+      const show = this.getShow(input.showId);
+
+      if (new Date(show.startsAt).getTime() <= Date.now()) {
+        throw new BookingError('This show has already started', 409, 'SHOW_STARTED');
+      }
+
+      const { seats } = this.getSeatMap(input.showId);
+      const ownHeld = input.holdId
+        ? new Set(this.holds.get(input.holdId)?.seatIds ?? [])
+        : new Set<string>();
+      const visible = seats.map((seat) =>
+        seat.status === 'held' && ownHeld.has(seat.id) ? { ...seat, status: 'available' as const } : seat,
+      );
+
+      const selected = this.assertSeatsSelectable(input.seatIds, visible);
+
+      const booking: Booking = {
+        reference: generateReference(),
+        showId: input.showId,
+        seatIds: [...input.seatIds],
+        customerName: input.customerName,
+        email: input.email,
+        totalCents: selected.reduce((sum, seat) => sum + seat.priceCents, 0),
+        currency: show.currency,
+        status: 'confirmed',
+        createdAt: new Date().toISOString(),
+      };
+
+      await appendFile(BOOKING_LEDGER_PATH, `${JSON.stringify(booking)}\n`, 'utf8');
+
+      const occupied = this.occupancy.get(input.showId)!;
+      for (const seatId of input.seatIds) occupied.set(seatId, booking.reference);
+      this.bookings.set(booking.reference, booking);
+      if (input.holdId) this.releaseHold(input.holdId);
+
+      return booking;
+    } finally {
+      resolveTurn();
     }
-
-    // Seats inside the caller's own hold must not count as unavailable.
-    const { seats } = this.getSeatMap(input.showId);
-    const ownHeld = input.holdId
-      ? new Set(this.holds.get(input.holdId)?.seatIds ?? [])
-      : new Set<string>();
-    const visible = seats.map((seat) =>
-      seat.status === 'held' && ownHeld.has(seat.id) ? { ...seat, status: 'available' as const } : seat,
-    );
-
-    const selected = this.assertSeatsSelectable(input.seatIds, visible);
-
-    const booking: Booking = {
-      reference: generateReference(),
-      showId: input.showId,
-      seatIds: [...input.seatIds],
-      customerName: input.customerName,
-      email: input.email,
-      totalCents: selected.reduce((sum, seat) => sum + seat.priceCents, 0),
-      currency: show.currency,
-      status: 'confirmed',
-      createdAt: new Date().toISOString(),
-    };
-
-    // Write ahead of the in-memory commit: if the process dies mid-booking,
-    // the ledger still shows what was sold, which is exactly what was missing
-    // the last time the API restarted under load.
-    await appendFile(BOOKING_LEDGER_PATH, `${JSON.stringify(booking)}\n`, 'utf8');
-
-    const occupied = this.occupancy.get(input.showId)!;
-    for (const seatId of input.seatIds) occupied.set(seatId, booking.reference);
-    this.bookings.set(booking.reference, booking);
-    if (input.holdId) this.releaseHold(input.holdId);
-
-    return booking;
   }
 
   getBooking(reference: string): Booking {
