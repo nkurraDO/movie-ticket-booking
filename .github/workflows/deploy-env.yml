@@ -1,0 +1,110 @@
+name: Deploy to a DOKS environment
+
+# Reusable deploy. Both pre-production and production go through this, so the
+# two environments cannot drift apart in how they are rolled out -- only in
+# which cluster and which overlay they point at.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment to deploy through, so its gates apply.
+        required: true
+        type: string
+      cluster_id:
+        description: DOKS cluster to apply to.
+        required: true
+        type: string
+      overlay:
+        description: Kustomize overlay directory for this environment.
+        required: true
+        type: string
+    secrets:
+      do_token:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  DOCR_REPO: registry.digitalocean.com/managed-agents-demo-v2/movie-ticket-booking
+  NAMESPACE: movie-booking
+
+jobs:
+  deploy:
+    name: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.do_token }}
+
+      # Short-lived credentials minted per run, so no kubeconfig is stored.
+      - name: Save cluster credentials
+        run: doctl kubernetes cluster kubeconfig save "${{ inputs.cluster_id }}" --expiry-seconds 900
+
+      - name: Ensure namespace and registry pull secret
+        run: |
+          kubectl apply -f k8s/base/namespace.yaml
+          doctl registry kubernetes-manifest --namespace "$NAMESPACE" | kubectl apply -f -
+
+      - name: Install kustomize
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo install -m 0755 kustomize /usr/local/bin/kustomize
+
+      # Pinning to the commit SHA makes every deploy immutable and traceable:
+      # the running image can always be mapped back to the commit that built
+      # it, and a redeploy can never silently pick up different bits. It also
+      # guarantees pre-production and production run the same bits.
+      - name: Pin images to this commit
+        working-directory: ${{ inputs.overlay }}
+        run: |
+          kustomize edit set image "mtb-backend=${DOCR_REPO}:backend-${GITHUB_SHA}"
+          kustomize edit set image "mtb-frontend=${DOCR_REPO}:frontend-${GITHUB_SHA}"
+
+      - name: Apply manifests
+        run: kubectl apply -k "${{ inputs.overlay }}"
+
+      - name: Wait for rollout
+        run: |
+          kubectl -n "$NAMESPACE" rollout status deploy/mtb-backend  --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status deploy/mtb-frontend --timeout=300s
+
+      # Runs from inside a frontend pod on purpose. The load balancer is
+      # firewalled to a single source IP, so an external probe from a runner
+      # would fail for reasons unrelated to the health of the release.
+      #
+      # Non-blocking today: flip continue-on-error to false (or add a rollback
+      # step) once you want a bad release to fail the pipeline.
+      - name: Smoke test
+        id: smoke
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          echo "Checking the API through the frontend proxy..."
+          kubectl -n "$NAMESPACE" exec deploy/mtb-frontend -c web -- \
+            wget -qO- --timeout=8 http://127.0.0.1:8080/api/movies | head -c 200
+          echo
+          echo "Checking that the static app is served..."
+          kubectl -n "$NAMESPACE" exec deploy/mtb-frontend -c web -- \
+            wget -qO- --timeout=8 http://127.0.0.1:8080/healthz
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ inputs.environment }}: deployed \`${GITHUB_SHA:0:7}\` from \`${{ inputs.overlay }}\`"
+            echo
+            echo "| Component | Image |"
+            echo "| --- | --- |"
+            echo "| backend | \`${DOCR_REPO}:backend-${GITHUB_SHA}\` |"
+            echo "| frontend | \`${DOCR_REPO}:frontend-${GITHUB_SHA}\` |"
+            echo
+            echo "Smoke test: **${{ steps.smoke.outcome }}**"
+            echo
+            kubectl -n "$NAMESPACE" get deploy,pods 2>&1 | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"

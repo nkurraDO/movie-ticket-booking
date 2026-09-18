@@ -163,6 +163,9 @@ minor version, same ingress-nginx release and the same PROXY-protocol and
 source-range settings on its load balancer. It exists so that a change can be
 observed running before it reaches production.
 
+Merges to `main` deploy here automatically, ahead of production. To apply it
+by hand:
+
 ```bash
 kubectl --context do-atl1-movie-booking-preprod apply -k k8s/overlays/preprod
 ```
@@ -175,9 +178,28 @@ pass here and still fail in production. To see what currently differs:
 diff <(kubectl kustomize k8s/overlays/preprod) <(kubectl kustomize k8s/overlays/doks)
 ```
 
-Promote by deploying the same image tags, built once, to preprod first and to
-production only afterwards. Rebuilding per environment defeats the purpose,
-since the artifact tested is then not the artifact shipped.
+### Promotion pipeline
+
+`.github/workflows/deploy.yml` runs on every merge to `main` and promotes in
+one ordered pass:
+
+```
+build and push images  ->  pre-production  ->  production
+```
+
+Images are built once and both environments are pinned to the same
+commit-SHA tags, so production runs the bits pre-production was checked on.
+Rebuilding per environment would defeat the purpose, since the artifact tested
+would not be the artifact shipped. Production runs only if pre-production
+rolled out cleanly.
+
+Both stages share `.github/workflows/deploy-env.yml`, so the two environments
+cannot drift apart in *how* they are rolled out — only in which cluster and
+overlay they target. Each stage maps to a GitHub environment (`preprod`,
+`production`), so approval gates can be attached per stage.
+
+Note that the smoke test is read-only today: it fetches the catalogue and the
+static app, so it will not catch a regression that only affects writes.
 
 ### Restricting the public endpoint to your IP
 
