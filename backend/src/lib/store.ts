@@ -156,7 +156,7 @@ export class Store {
     this.availabilityLog.push({ at: new Date().toISOString(), showId, seats });
 
     if (this.availabilityLog.length > MAX_AVAILABILITY_SNAPSHOTS) {
-      this.availabilityLog.slice(-MAX_AVAILABILITY_SNAPSHOTS);
+      this.availabilityLog.splice(0, this.availabilityLog.length - MAX_AVAILABILITY_SNAPSHOTS);
     }
   }
 
