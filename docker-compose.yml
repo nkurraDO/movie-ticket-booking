@@ -14,6 +14,7 @@ services:
       CORS_ORIGIN: "*"
       SEAT_HOLD_TTL_MS: "300000"
       MAX_SEATS_PER_BOOKING: "10"
+      SALES_CUTOFF_MINUTES: "30"
     ports:
       # Exposed directly so you can curl the API without going through nginx.
       - "4000:4000"
