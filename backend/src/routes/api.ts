@@ -4,11 +4,16 @@ import { BookingError, MAX_SEATS_PER_BOOKING, store } from '../lib/store.js';
 
 export const api = Router();
 
-/** Wraps a handler so thrown errors reach the Express error middleware. */
-function handle(fn: (req: any, res: any) => void) {
+/**
+ * Wraps a handler so thrown errors reach the Express error middleware.
+ * Express 4 does not forward rejected promises, so async handlers have their
+ * rejection routed to `next` explicitly.
+ */
+function handle(fn: (req: any, res: any) => void | Promise<void>) {
   return (req: any, res: any, next: any) => {
     try {
-      fn(req, res);
+      const result = fn(req, res);
+      if (result instanceof Promise) result.catch(next);
     } catch (err) {
       next(err);
     }
@@ -122,7 +127,7 @@ api.delete(
 
 api.post(
   '/bookings',
-  handle((req, res) => {
+  handle(async (req, res) => {
     const body = parse(
       seatSelection.extend({
         customerName: z.string().trim().min(2, 'Name must be at least 2 characters').max(80),
@@ -131,7 +136,7 @@ api.post(
       }),
       req.body,
     );
-    const booking = store.book(body);
+    const booking = await store.book(body);
     res.status(201).json({ booking });
   }),
 );
