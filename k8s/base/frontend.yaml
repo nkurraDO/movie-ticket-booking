@@ -24,7 +24,7 @@ data:
   # Cluster DNS name of the backend Service. This is the only coupling
   # between the two services, and it is versioned so the API v2 cutover can
   # move the frontend across without both versions sharing one Service.
-  BACKEND_URL: http://mtb-backend-v2.movie-booking.svc.cluster.local:4000
+  BACKEND_URL: http://mtb-backend.movie-booking.svc.cluster.local:4000
 ---
 apiVersion: apps/v1
 kind: Deployment
