@@ -41,7 +41,7 @@ backend/           Express API (TypeScript)
 frontend/          React single-page app
   src/pages/       Films, showtimes, seat picker, confirmation, bookings
   nginx/           Runtime nginx template and resolver hook
-k8s/base/          Namespace, both services, ingress, network policies
+k8s/base/          Namespace, both services, ingress
 k8s/overlays/dev   Local cluster: single replicas, no HPA/PDB
 k8s/overlays/prod  Registry images, 3 web replicas, real hostname
 k8s/overlays/doks  DigitalOcean Kubernetes with images in DOCR
@@ -151,9 +151,8 @@ The overlay strips the Ingress `host` so the app answers on the load balancer
 IP directly. Once DNS points at that IP, put the hostname back and add
 cert-manager for TLS.
 
-This cluster runs Cilium, so the NetworkPolicies are enforced rather than
-merely stored. A pod in the namespace that is neither the frontend nor the
-ingress controller times out when it tries to reach the backend.
+Traffic inside the namespace is unrestricted: any pod can reach the backend
+directly, not only the frontend and the ingress controller.
 
 ### Pre-production
 
@@ -304,9 +303,10 @@ nginx resolves the backend at request time using the cluster resolver it reads
 from `/etc/resolv.conf` at startup, so a frontend pod starts cleanly even when
 the backend has no ready endpoints yet.
 
-NetworkPolicies default-deny ingress in the namespace and allow only
-frontend → backend and ingress-controller → both. They need a CNI that enforces
-policy (Calico, Cilium); other clusters store them without effect.
+There are no NetworkPolicies, so pod-to-pod traffic in the namespace is
+unrestricted and the backend Service is reachable from anything in the
+cluster. Restoring a default-deny policy needs a CNI that enforces it
+(Calico, Cilium); other clusters store policies without effect.
 
 ### Scaling: read this before raising backend replicas
 

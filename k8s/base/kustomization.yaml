@@ -16,7 +16,6 @@ resources:
   - backend.yaml
   - frontend.yaml
   - ingress.yaml
-  - networkpolicy.yaml
 
 images:
   - name: mtb-backend
