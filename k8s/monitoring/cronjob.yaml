@@ -50,6 +50,12 @@ spec:
                   value: "10"
                 - name: JIRA_ISSUE_TYPE
                   value: Bug
+                - name: JIRA_PROJECT_KEY
+                  value: MARSOHS
+                - name: JIRA_EPIC_KEY
+                  value: MARSOHS-1433
+                - name: JIRA_LABEL
+                  value: ops-oncall
                 - name: JIRA_RENOTIFY_MINUTES
                   value: "30"
               # Optional so the probe still runs (and logs what it would file)

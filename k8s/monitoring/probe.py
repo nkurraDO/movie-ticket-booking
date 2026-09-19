@@ -31,6 +31,11 @@ JIRA_PROJECT = os.environ.get("JIRA_PROJECT_KEY", "")
 JIRA_EMAIL = os.environ.get("JIRA_EMAIL", "")
 JIRA_TOKEN = os.environ.get("JIRA_API_TOKEN", "")
 JIRA_ISSUE_TYPE = os.environ.get("JIRA_ISSUE_TYPE", "Bug")
+JIRA_EPIC_KEY = os.environ.get("JIRA_EPIC_KEY", "")
+# MARSOHS is a company-managed project, so an epic is set through the legacy
+# Epic Link custom field rather than through `parent`.
+JIRA_EPIC_FIELD = os.environ.get("JIRA_EPIC_FIELD", "customfield_10014")
+JIRA_LABEL = os.environ.get("JIRA_LABEL", "ops-oncall")
 RENOTIFY_MINUTES = int(os.environ.get("JIRA_RENOTIFY_MINUTES", "30"))
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
 
@@ -220,26 +225,31 @@ def jira_find_open(fingerprint: str):
 
 
 def jira_create(failure: ProbeFailure, trace: list[str]) -> str | None:
-    body = {
-        "fields": {
-            "project": {"key": JIRA_PROJECT},
-            "issuetype": {"name": JIRA_ISSUE_TYPE},
-            "summary": f"[{ENVIRONMENT}] Booking journey failing at '{failure.step}': {failure.summary}",
-            "labels": ["mtb-synthetic", f"env-{ENVIRONMENT}", f"fp-{failure.fingerprint}"],
-            "description": adf([
-                "The synthetic customer-journey probe could not complete a booking.",
-                f"Environment: {ENVIRONMENT}",
-                f"Failing step: {failure.step}",
-                f"Observed: {failure.summary}",
-                f"Response: {failure.detail}",
-                "Steps completed before the failure:",
-                "\n".join(trace) if trace else "(none - failed on the first call)",
-                f"Probe target: {BASE}",
-                f"Detected at: {datetime.now(timezone.utc).isoformat()}",
-            ]),
-        }
+    fields = {
+        "project": {"key": JIRA_PROJECT},
+        "issuetype": {"name": JIRA_ISSUE_TYPE},
+        "summary": f"[{ENVIRONMENT}] Booking journey failing at '{failure.step}': {failure.summary}",
+        # fp-* is what makes deduplication work: it is how a later run
+        # recognises that this exact failure already has an open ticket.
+        "labels": [JIRA_LABEL, f"env-{ENVIRONMENT}", f"fp-{failure.fingerprint}"],
     }
-    status, payload = request("POST", f"{JIRA_BASE}/rest/api/3/issue", body, auth=jira_auth())
+    fields["description"] = adf([
+        "The synthetic customer-journey probe could not complete a booking.",
+        f"Environment: {ENVIRONMENT}",
+        f"Failing step: {failure.step}",
+        f"Observed: {failure.summary}",
+        f"Response: {failure.detail}",
+        "Steps completed before the failure:",
+        "\n".join(trace) if trace else "(none - failed on the first call)",
+        f"Probe target: {BASE}",
+        f"Detected at: {datetime.now(timezone.utc).isoformat()}",
+    ])
+    if JIRA_EPIC_KEY:
+        fields[JIRA_EPIC_FIELD] = JIRA_EPIC_KEY
+
+    status, payload = request(
+        "POST", f"{JIRA_BASE}/rest/api/3/issue", {"fields": fields}, auth=jira_auth()
+    )
     if status >= 300:
         print(f"jira: create failed ({status}): {json.dumps(payload)[:400]}", file=sys.stderr)
         return None
@@ -255,15 +265,32 @@ def jira_comment(key: str, text: str) -> None:
         print(f"jira: comment failed ({status}): {json.dumps(payload)[:300]}", file=sys.stderr)
 
 
-def stale(issue: dict) -> bool:
-    """True if the issue has not been touched for RENOTIFY_MINUTES."""
-    raw = (issue.get("fields") or {}).get("updated")
-    if not raw:
-        return True
+def parse_timestamp(raw: str) -> datetime | None:
+    """Parse a Jira timestamp.
+
+    Jira returns a numeric offset without a colon (``-0400``), which
+    fromisoformat only accepts from Python 3.11 onwards.
+    """
+    text = raw.strip().replace("Z", "+00:00")
+    if len(text) > 5 and text[-5] in "+-" and text[-3] != ":":
+        text = f"{text[:-2]}:{text[-2:]}"
     try:
-        updated = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return datetime.fromisoformat(text)
     except ValueError:
-        return True
+        return None
+
+
+def stale(issue: dict) -> bool:
+    """True if the issue has not been touched for RENOTIFY_MINUTES.
+
+    Errs towards staying quiet. The ticket is already open either way, and a
+    probe that runs every minute would otherwise bury it in comments.
+    """
+    raw = (issue.get("fields") or {}).get("updated")
+    updated = parse_timestamp(raw) if raw else None
+    if updated is None:
+        print(f"jira: could not read 'updated' ({raw!r}), not re-notifying", file=sys.stderr)
+        return False
     return datetime.now(timezone.utc) - updated > timedelta(minutes=RENOTIFY_MINUTES)
 
 
