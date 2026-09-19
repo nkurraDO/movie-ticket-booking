@@ -10,6 +10,7 @@ metadata:
   labels:
     app.kubernetes.io/name: mtb-backend
     app.kubernetes.io/component: backend
+    app.kubernetes.io/instance: movie-booking
 automountServiceAccountToken: false
 ---
 apiVersion: v1
@@ -20,6 +21,7 @@ metadata:
   labels:
     app.kubernetes.io/name: mtb-backend
     app.kubernetes.io/component: backend
+    app.kubernetes.io/instance: movie-booking
 data:
   NODE_ENV: production
   SERVICE_NAME: mtb-backend
@@ -46,6 +48,7 @@ metadata:
   labels:
     app.kubernetes.io/name: mtb-backend
     app.kubernetes.io/component: backend
+    app.kubernetes.io/instance: movie-booking
 spec:
   accessModes:
     - ReadWriteOnce
@@ -62,6 +65,7 @@ metadata:
     app.kubernetes.io/name: mtb-backend
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: movie-ticket-booking
+    app.kubernetes.io/instance: movie-booking
 spec:
   # Deliberately one replica: the reference backend keeps bookings in an
   # in-memory store, so a second pod would hold a different set of seats and
@@ -171,10 +175,15 @@ metadata:
   labels:
     app.kubernetes.io/name: mtb-backend
     app.kubernetes.io/component: backend
+    app.kubernetes.io/instance: movie-booking
 spec:
   type: ClusterIP
+  # Scoped to this instance of the stack. Selecting on name alone means a
+  # second deployment into the same namespace would have its pods picked up
+  # by this Service as well.
   selector:
     app.kubernetes.io/name: mtb-backend
+    app.kubernetes.io/instance: movie-booking
   ports:
     - name: http
       port: 4000
