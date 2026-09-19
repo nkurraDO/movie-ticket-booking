@@ -286,7 +286,7 @@ Frontend (`mtb-frontend-config`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BACKEND_URL` | `http://mtb-backend.movie-booking.svc.cluster.local:4000` | Proxy target for `/api` |
+| `BACKEND_URL` | `http://mtb-backend-v2.movie-booking.svc.cluster.local:4000` | Proxy target for `/api` |
 
 ## Production readiness
 
