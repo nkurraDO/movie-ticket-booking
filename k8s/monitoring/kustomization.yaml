@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Applied to the production cluster only, and deliberately kept out of the
+# app overlays: the probe must not be redeployed (or broken) by the same
+# pipeline it is watching.
+
+resources:
+  - namespace.yaml
+  - netpol.yaml
+  - cronjob.yaml
+
+configMapGenerator:
+  - name: booking-journey-probe-script
+    namespace: monitoring
+    files:
+      - probe.py

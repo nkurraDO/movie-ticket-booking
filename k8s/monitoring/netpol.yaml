@@ -1,0 +1,32 @@
+# Lives in the app namespace because a NetworkPolicy can only select pods in
+# its own namespace, but it is owned by the monitoring stack.
+#
+# This policy lists ingress-nginx as well as the probe. A NetworkPolicy that
+# selects a pod makes that pod deny-by-default for ingress, so naming only the
+# probe here would cut off real customer traffic the moment the other policies
+# in this namespace are removed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mtb-frontend-allow-probe
+  namespace: movie-booking
+  labels:
+    app.kubernetes.io/name: booking-journey-probe
+    app.kubernetes.io/part-of: movie-ticket-booking
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mtb-frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
