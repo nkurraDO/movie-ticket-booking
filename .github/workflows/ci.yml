@@ -78,3 +78,10 @@ jobs:
             kubectl kustomize "${overlay}" \
               | kubeconform -strict -summary -ignore-missing-schemas -
           done
+
+      # The monitoring stack is applied out of band rather than by the deploy
+      # pipeline, so it would otherwise never be validated anywhere.
+      - name: Validate the monitoring stack
+        run: |
+          kubectl kustomize k8s/monitoring \
+            | kubeconform -strict -summary -ignore-missing-schemas -
