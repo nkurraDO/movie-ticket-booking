@@ -22,13 +22,12 @@ metadata:
     app.kubernetes.io/component: frontend
 data:
   # Cluster DNS name of the backend Service. This is the only coupling
-  # between the two services, and it is versioned so the API v2 cutover can
-  # move the frontend across without both versions sharing one Service.
+  # between the two services.
   #
-  # Now on v2. Keeping the frontend on the unversioned name would have meant
-  # cutting over by editing the Service's selector underneath live traffic,
-  # with no way back except another edit.
-  BACKEND_URL: http://mtb-backend-v2.movie-booking.svc.cluster.local:4000
+  # Reverted to the unversioned name: no mtb-backend-v2 Service exists in the
+  # cluster, so every /api request failed DNS resolution and returned 503
+  # (MARSOHS-1602). Reintroduce the v2 name only alongside the v2 Service.
+  BACKEND_URL: http://mtb-backend.movie-booking.svc.cluster.local:4000
 ---
 apiVersion: apps/v1
 kind: Deployment
