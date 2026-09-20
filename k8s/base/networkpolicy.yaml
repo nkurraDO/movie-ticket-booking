@@ -67,7 +67,14 @@ spec:
   policyTypes:
     - Egress
   egress:
-    - ports:
+    # Port 53 to an arbitrary destination is a data channel: a compromised pod
+    # can encode what it reads into hostnames and have a nameserver it owns
+    # collect them. Cluster workloads only ever need the in-cluster resolver,
+    # so egress on 53 is pinned to the service network kube-dns is reachable on.
+    - to:
+        - ipBlock:
+            cidr: 10.128.0.0/16
+      ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
