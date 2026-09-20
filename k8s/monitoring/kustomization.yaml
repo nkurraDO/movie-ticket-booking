@@ -8,7 +8,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - netpol.yaml
-  - cronjob.yaml
+  - deployment.yaml
 
 configMapGenerator:
   - name: booking-journey-probe-script

@@ -16,7 +16,10 @@ import base64
 import hashlib
 import json
 import os
+import random
+import signal
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +45,13 @@ DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
 # Shows starting sooner than this are skipped. The product legitimately closes
 # online sales shortly before a showtime, and the probe must not alert on that.
 MIN_LEAD_TIME = timedelta(hours=6)
+
+# How many different seats to try before treating contention as a real fault.
+SEAT_ATTEMPTS = int(os.environ.get("PROBE_SEAT_ATTEMPTS", "3"))
+
+# Seconds between passes. Zero runs a single pass and exits (CronJob style).
+INTERVAL = float(os.environ.get("PROBE_INTERVAL_SECONDS", "0"))
+CLEANUP_ATTEMPTS = int(os.environ.get("PROBE_CLEANUP_ATTEMPTS", "4"))
 
 
 class ProbeFailure(Exception):
@@ -85,6 +95,21 @@ def api(method: str, path: str, body: dict | None = None):
     return request(method, f"{BASE}{path}", body)
 
 
+def error_code(payload: dict, status: int) -> str:
+    """Pull the API's stable error code out of a failure response.
+
+    The fingerprint is built from this, so it has to stay identical across
+    runs of the same fault. The API nests the code as ``{"error": {"code":
+    ...}}`` and puts variable data in the sibling message ("Seats do not
+    exist in this auditorium: ZZ99"), so anything that drags the message in
+    would produce a fresh fingerprint - and a fresh ticket - every run.
+    """
+    err = payload.get("error")
+    if isinstance(err, dict):
+        return str(err.get("code") or status)
+    return str(payload.get("code") or err or status)
+
+
 def expect(step: str, method: str, path: str, want: int, body: dict | None = None):
     status, payload = api(method, path, body)
     if status != want:
@@ -92,7 +117,7 @@ def expect(step: str, method: str, path: str, want: int, body: dict | None = Non
             code = "TRANSPORT"
             detail = payload.get("transport_error", "unreachable")
         else:
-            code = str(payload.get("code") or payload.get("error") or status)
+            code = error_code(payload, status)
             detail = json.dumps(payload)[:600]
         raise ProbeFailure(
             step,
@@ -103,9 +128,52 @@ def expect(step: str, method: str, path: str, want: int, body: dict | None = Non
     return payload
 
 
-def journey() -> list[str]:
-    """Run the full booking journey. Returns a human-readable trace."""
-    trace: list[str] = []
+def journey(trace: list[str]) -> None:
+    """Run the full booking journey, appending progress to ``trace``.
+
+    The caller owns the list so that the steps completed before a failure
+    survive the exception and can be put in the ticket.
+    """
+    state: dict[str, str | None] = {"hold": None, "booking": None}
+    try:
+        _journey(trace, state)
+    finally:
+        release(state, trace)
+
+
+def release(state: dict, trace: list[str]) -> None:
+    """Give back whatever the run was holding, however it ended.
+
+    Without this a run that fails after the hold leaves the seat locked for
+    the length of the hold TTL, so the next run finds it taken and reports a
+    different step and a different fingerprint. One fault would then open a
+    second ticket, and the probe would eat a seat a minute.
+    """
+    if state.get("booking"):
+        status = give_back("DELETE", f"/api/bookings/{state['booking']}")
+        trace.append(f"cleanup: cancelled {state['booking']} ({status})")
+    elif state.get("hold"):
+        status = give_back("DELETE", f"/api/holds/{state['hold']}")
+        trace.append(f"cleanup: released hold ({status})")
+
+
+def give_back(method: str, path: str) -> str:
+    """Hand a seat back, retrying a few times.
+
+    Worth retrying rather than shrugging off: a cancel that never lands
+    leaves the seat sold for good, and the probe would eat the auditorium a
+    seat at a time.
+    """
+    last = 0
+    for _ in range(CLEANUP_ATTEMPTS):
+        last, _payload = api(method, path)
+        if 200 <= last < 300:
+            return str(last)
+        time.sleep(0.3)
+    return f"{last} FAILED after {CLEANUP_ATTEMPTS} attempts"
+
+
+def _journey(trace: list[str], state: dict) -> list[str]:
 
     movies = expect("catalogue", "GET", "/api/movies", 200).get("movies", [])
     if not movies:
@@ -128,22 +196,46 @@ def journey() -> list[str]:
     show = bookable[0]
     trace.append(f"schedule: {len(shows)} shows, probing {show['id']}")
 
-    seatmap = expect("seatmap", "GET", f"/api/shows/{show['id']}/seats", 200)
-    available = [s for s in seatmap.get("seats", []) if s.get("status") == "available"]
-    if not available:
-        raise ProbeFailure(
-            "seatmap",
-            f"Show {show['id']} has no available seats",
-            f"seats: {len(seatmap.get('seats', []))}, available: 0",
-            "NO_SEATS",
-        )
-    seat = available[len(available) // 2]["id"]
-    trace.append(f"seatmap: {len(available)} seats available, selecting {seat}")
+    # Losing a race for one seat is not an outage: the seat map is a snapshot,
+    # and anything can take the seat between reading it and holding it. Only
+    # give up once several distinct seats have been refused.
+    seat = None
+    hold = None
+    for attempt in range(1, SEAT_ATTEMPTS + 1):
+        seatmap = expect("seatmap", "GET", f"/api/shows/{show['id']}/seats", 200)
+        available = [s for s in seatmap.get("seats", []) if s.get("status") == "available"]
+        if not available:
+            raise ProbeFailure(
+                "seatmap",
+                f"Show {show['id']} has no available seats",
+                f"seats: {len(seatmap.get('seats', []))}, available: 0",
+                "NO_SEATS",
+            )
+        seat = random.choice(available)["id"]
+        trace.append(f"seatmap: {len(available)} available, trying {seat}")
 
-    hold = expect(
-        "hold", "POST", "/api/holds", 201,
-        {"showId": show["id"], "seatIds": [seat]},
-    )["hold"]
+        status, payload = api("POST", "/api/holds", {"showId": show["id"], "seatIds": [seat]})
+        if status == 201:
+            hold = payload["hold"]
+            break
+        if status == 409 and error_code(payload, status) == "SEATS_UNAVAILABLE":
+            trace.append(f"hold: {seat} taken, retrying ({attempt}/{SEAT_ATTEMPTS})")
+            continue
+        raise ProbeFailure(
+            "hold",
+            f"POST /api/holds returned {status or 'no response'}, expected 201",
+            json.dumps(payload)[:600] if status else payload.get("transport_error", "unreachable"),
+            error_code(payload, status) if status else "TRANSPORT",
+        )
+
+    if hold is None:
+        raise ProbeFailure(
+            "hold",
+            f"Could not hold any of {SEAT_ATTEMPTS} seats offered as available",
+            f"last seat tried: {seat}",
+            "SEATS_UNAVAILABLE",
+        )
+    state["hold"] = hold["id"]
     trace.append(f"hold: {hold['id']}")
 
     booking = expect(
@@ -157,6 +249,7 @@ def journey() -> list[str]:
         },
     )["booking"]
     reference = booking["reference"]
+    state["booking"] = reference
     trace.append(f"book: {reference}")
 
     expect("lookup", "GET", f"/api/bookings/{reference}", 200)
@@ -165,19 +258,15 @@ def journey() -> list[str]:
     # The seat must actually read as taken afterwards. A booking that confirms
     # but leaves the seat available is the signature of a lost write.
     after = expect("verify", "GET", f"/api/shows/{show['id']}/seats", 200)
-    state = next((s for s in after.get("seats", []) if s["id"] == seat), None)
-    if state is None or state.get("status") == "available":
+    seat_state = next((s for s in after.get("seats", []) if s["id"] == seat), None)
+    if seat_state is None or seat_state.get("status") == "available":
         raise ProbeFailure(
             "verify",
             f"Seat {seat} still reads as available after booking {reference}",
-            f"seat state after booking: {json.dumps(state)}",
+            f"seat state after booking: {json.dumps(seat_state)}",
             "LOST_WRITE",
         )
-    trace.append(f"verify: {seat} now {state.get('status')}")
-
-    # Best effort: give the seat back so the probe does not consume inventory.
-    status, _ = api("DELETE", f"/api/bookings/{reference}")
-    trace.append(f"cleanup: cancel returned {status}")
+    trace.append(f"verify: {seat} now {seat_state.get('status')}")
 
     return trace
 
@@ -200,6 +289,12 @@ def adf(paragraphs: list[str]) -> dict:
     }
 
 
+# Returned when the duplicate check could not be carried out at all. Kept
+# distinct from "no open ticket": if we cannot tell, filing anyway would open
+# a fresh ticket on every run for as long as Jira search stays unhappy.
+SEARCH_FAILED = object()
+
+
 def jira_find_open(fingerprint: str):
     jql = (
         f'project = "{JIRA_PROJECT}" AND labels = "fp-{fingerprint}" '
@@ -217,9 +312,9 @@ def jira_find_open(fingerprint: str):
             + urllib.parse.urlencode({"jql": jql, "fields": "updated,status", "maxResults": 5}),
             auth=jira_auth(),
         )
-    if status >= 300:
+    if status >= 300 or status == 0:
         print(f"jira: search failed ({status}): {json.dumps(payload)[:300]}", file=sys.stderr)
-        return None
+        return SEARCH_FAILED
     issues = payload.get("issues") or []
     return issues[0] if issues else None
 
@@ -299,6 +394,9 @@ def report(failure: ProbeFailure, trace: list[str]) -> None:
         print(f"jira: DRY_RUN, would file fp-{failure.fingerprint}: {failure.summary}")
         return
     existing = jira_find_open(failure.fingerprint)
+    if existing is SEARCH_FAILED:
+        print("jira: cannot confirm whether this is already filed, leaving it alone")
+        return
     if existing:
         key = existing["key"]
         if stale(existing):
@@ -311,21 +409,47 @@ def report(failure: ProbeFailure, trace: list[str]) -> None:
     print(f"jira: opened {key}" if key else "jira: could not open an issue")
 
 
-def main() -> int:
+def run_once() -> int:
     trace: list[str] = []
+    stamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
     try:
-        trace = journey()
+        journey(trace)
     except ProbeFailure as failure:
-        print(f"FAIL [{failure.step}] {failure.summary}")
+        print(f"{stamp} FAIL [{failure.step}] {failure.summary}", flush=True)
         print(f"  fingerprint: fp-{failure.fingerprint}")
         print(f"  detail: {failure.detail}")
         for line in trace:
             print(f"  completed: {line}")
         report(failure, trace)
         return 1
-    print(f"OK {ENVIRONMENT}: booking journey completed")
+    except Exception as exc:  # never let one bad run kill a long-lived probe
+        print(f"{stamp} ERROR unexpected: {type(exc).__name__}: {exc}", flush=True)
+        return 1
+    print(f"{stamp} OK {ENVIRONMENT}: booking journey completed", flush=True)
     for line in trace:
         print(f"  {line}")
+    return 0
+
+
+def main() -> int:
+    # A Kubernetes CronJob cannot schedule more often than once a minute, so
+    # anything faster runs as a long-lived loop instead of one pod per pass.
+    if INTERVAL <= 0:
+        return run_once()
+
+    print(f"probe: every {INTERVAL}s against {BASE}", flush=True)
+    stopping = {"now": False}
+    signal.signal(signal.SIGTERM, lambda *_: stopping.__setitem__("now", True))
+    signal.signal(signal.SIGINT, lambda *_: stopping.__setitem__("now", True))
+
+    while not stopping["now"]:
+        started = time.monotonic()
+        run_once()
+        # Pace from the start of each pass so a slow run does not push the
+        # schedule out, and wake often enough to shut down promptly.
+        while not stopping["now"] and time.monotonic() - started < INTERVAL:
+            time.sleep(0.5)
+    print("probe: stopping", flush=True)
     return 0
 
 

@@ -1,0 +1,82 @@
+# A long-lived loop rather than a CronJob: cron cannot schedule more often
+# than once a minute, and at a ten second interval the pod churn would cost
+# more than the probe itself.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: booking-journey-probe
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: booking-journey-probe
+    app.kubernetes.io/part-of: movie-ticket-booking
+spec:
+  replicas: 1
+  # Two probes would race each other for seats and double the booking churn.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: booking-journey-probe
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: booking-journey-probe
+    spec:
+      automountServiceAccountToken: false
+      # Long enough for an in-flight pass to finish and hand its seat back.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: probe
+          image: python:3.12-alpine
+          command: ["python3", "-u", "/probe/probe.py"]
+          env:
+            - name: ENVIRONMENT
+              value: production
+            # Customers reach the API through the frontend's nginx proxy, so
+            # probing that path covers the proxy config too.
+            - name: PROBE_TARGET
+              value: http://mtb-frontend.movie-booking.svc.cluster.local
+            - name: PROBE_INTERVAL_SECONDS
+              value: "10"
+            - name: PROBE_TIMEOUT_SECONDS
+              value: "8"
+            - name: JIRA_ISSUE_TYPE
+              value: Bug
+            - name: JIRA_PROJECT_KEY
+              value: MARSOHS
+            - name: JIRA_EPIC_KEY
+              value: MARSOHS-1433
+            - name: JIRA_LABEL
+              value: ops-oncall
+            - name: JIRA_RENOTIFY_MINUTES
+              value: "30"
+          envFrom:
+            - secretRef:
+                name: jira-credentials
+                optional: true
+          resources:
+            requests:
+              cpu: 20m
+              memory: 48Mi
+            limits:
+              cpu: 300m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: probe
+              mountPath: /probe
+              readOnly: true
+      volumes:
+        - name: probe
+          configMap:
+            name: booking-journey-probe-script
