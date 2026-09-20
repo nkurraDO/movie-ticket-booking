@@ -67,15 +67,12 @@ metadata:
     app.kubernetes.io/part-of: movie-ticket-booking
     app.kubernetes.io/instance: movie-booking
 spec:
-  # Two replicas, matching the availability pattern the frontend has used since
-  # the start. With a single API pod every node upgrade and every rollout took
-  # the booking API offline for as long as the replacement took to start, which
-  # is the one window where a customer mid-checkout loses their seats.
-  #
-  # Confirmed bookings are appended to the shared ledger volume before the seat
-  # is committed, so the durable record of what was sold is on the volume rather
-  # than in whichever pod happened to serve the request.
-  replicas: 2
+  # Deliberately one replica: the backend keeps seat holds and availability in
+  # an in-memory store, so a second pod holds a different, divergent set of
+  # seats. Running two replicas caused double-granted holds and stale-seat 409s
+  # (MARSOHS-1563). Point the API at Postgres/Redis before raising this or
+  # enabling the HorizontalPodAutoscaler in k8s/optional/backend-hpa.yaml.
+  replicas: 1
   revisionHistoryLimit: 5
   strategy:
     type: RollingUpdate
@@ -207,7 +204,9 @@ metadata:
     app.kubernetes.io/component: backend
     app.kubernetes.io/instance: movie-booking
 spec:
-  minAvailable: 1
+  # maxUnavailable (not minAvailable): with a deliberately single API pod,
+  # minAvailable: 1 would forbid every voluntary drain forever.
+  maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: mtb-backend
