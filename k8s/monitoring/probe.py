@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import os
+import random
 import sys
 import urllib.error
 import urllib.parse
@@ -42,6 +43,9 @@ DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
 # Shows starting sooner than this are skipped. The product legitimately closes
 # online sales shortly before a showtime, and the probe must not alert on that.
 MIN_LEAD_TIME = timedelta(hours=6)
+
+# How many different seats to try before treating contention as a real fault.
+SEAT_ATTEMPTS = int(os.environ.get("PROBE_SEAT_ATTEMPTS", "3"))
 
 
 class ProbeFailure(Exception):
@@ -85,6 +89,21 @@ def api(method: str, path: str, body: dict | None = None):
     return request(method, f"{BASE}{path}", body)
 
 
+def error_code(payload: dict, status: int) -> str:
+    """Pull the API's stable error code out of a failure response.
+
+    The fingerprint is built from this, so it has to stay identical across
+    runs of the same fault. The API nests the code as ``{"error": {"code":
+    ...}}`` and puts variable data in the sibling message ("Seats do not
+    exist in this auditorium: ZZ99"), so anything that drags the message in
+    would produce a fresh fingerprint - and a fresh ticket - every run.
+    """
+    err = payload.get("error")
+    if isinstance(err, dict):
+        return str(err.get("code") or status)
+    return str(payload.get("code") or err or status)
+
+
 def expect(step: str, method: str, path: str, want: int, body: dict | None = None):
     status, payload = api(method, path, body)
     if status != want:
@@ -92,7 +111,7 @@ def expect(step: str, method: str, path: str, want: int, body: dict | None = Non
             code = "TRANSPORT"
             detail = payload.get("transport_error", "unreachable")
         else:
-            code = str(payload.get("code") or payload.get("error") or status)
+            code = error_code(payload, status)
             detail = json.dumps(payload)[:600]
         raise ProbeFailure(
             step,
@@ -103,9 +122,36 @@ def expect(step: str, method: str, path: str, want: int, body: dict | None = Non
     return payload
 
 
-def journey() -> list[str]:
-    """Run the full booking journey. Returns a human-readable trace."""
-    trace: list[str] = []
+def journey(trace: list[str]) -> None:
+    """Run the full booking journey, appending progress to ``trace``.
+
+    The caller owns the list so that the steps completed before a failure
+    survive the exception and can be put in the ticket.
+    """
+    state: dict[str, str | None] = {"hold": None, "booking": None}
+    try:
+        _journey(trace, state)
+    finally:
+        release(state, trace)
+
+
+def release(state: dict, trace: list[str]) -> None:
+    """Give back whatever the run was holding, however it ended.
+
+    Without this a run that fails after the hold leaves the seat locked for
+    the length of the hold TTL, so the next run finds it taken and reports a
+    different step and a different fingerprint. One fault would then open a
+    second ticket, and the probe would eat a seat a minute.
+    """
+    if state.get("booking"):
+        status, _ = api("DELETE", f"/api/bookings/{state['booking']}")
+        trace.append(f"cleanup: cancelled {state['booking']} ({status})")
+    elif state.get("hold"):
+        status, _ = api("DELETE", f"/api/holds/{state['hold']}")
+        trace.append(f"cleanup: released hold ({status})")
+
+
+def _journey(trace: list[str], state: dict) -> list[str]:
 
     movies = expect("catalogue", "GET", "/api/movies", 200).get("movies", [])
     if not movies:
@@ -128,22 +174,46 @@ def journey() -> list[str]:
     show = bookable[0]
     trace.append(f"schedule: {len(shows)} shows, probing {show['id']}")
 
-    seatmap = expect("seatmap", "GET", f"/api/shows/{show['id']}/seats", 200)
-    available = [s for s in seatmap.get("seats", []) if s.get("status") == "available"]
-    if not available:
-        raise ProbeFailure(
-            "seatmap",
-            f"Show {show['id']} has no available seats",
-            f"seats: {len(seatmap.get('seats', []))}, available: 0",
-            "NO_SEATS",
-        )
-    seat = available[len(available) // 2]["id"]
-    trace.append(f"seatmap: {len(available)} seats available, selecting {seat}")
+    # Losing a race for one seat is not an outage: the seat map is a snapshot,
+    # and anything can take the seat between reading it and holding it. Only
+    # give up once several distinct seats have been refused.
+    seat = None
+    hold = None
+    for attempt in range(1, SEAT_ATTEMPTS + 1):
+        seatmap = expect("seatmap", "GET", f"/api/shows/{show['id']}/seats", 200)
+        available = [s for s in seatmap.get("seats", []) if s.get("status") == "available"]
+        if not available:
+            raise ProbeFailure(
+                "seatmap",
+                f"Show {show['id']} has no available seats",
+                f"seats: {len(seatmap.get('seats', []))}, available: 0",
+                "NO_SEATS",
+            )
+        seat = random.choice(available)["id"]
+        trace.append(f"seatmap: {len(available)} available, trying {seat}")
 
-    hold = expect(
-        "hold", "POST", "/api/holds", 201,
-        {"showId": show["id"], "seatIds": [seat]},
-    )["hold"]
+        status, payload = api("POST", "/api/holds", {"showId": show["id"], "seatIds": [seat]})
+        if status == 201:
+            hold = payload["hold"]
+            break
+        if status == 409 and error_code(payload, status) == "SEATS_UNAVAILABLE":
+            trace.append(f"hold: {seat} taken, retrying ({attempt}/{SEAT_ATTEMPTS})")
+            continue
+        raise ProbeFailure(
+            "hold",
+            f"POST /api/holds returned {status or 'no response'}, expected 201",
+            json.dumps(payload)[:600] if status else payload.get("transport_error", "unreachable"),
+            error_code(payload, status) if status else "TRANSPORT",
+        )
+
+    if hold is None:
+        raise ProbeFailure(
+            "hold",
+            f"Could not hold any of {SEAT_ATTEMPTS} seats offered as available",
+            f"last seat tried: {seat}",
+            "SEATS_UNAVAILABLE",
+        )
+    state["hold"] = hold["id"]
     trace.append(f"hold: {hold['id']}")
 
     booking = expect(
@@ -157,6 +227,7 @@ def journey() -> list[str]:
         },
     )["booking"]
     reference = booking["reference"]
+    state["booking"] = reference
     trace.append(f"book: {reference}")
 
     expect("lookup", "GET", f"/api/bookings/{reference}", 200)
@@ -165,19 +236,15 @@ def journey() -> list[str]:
     # The seat must actually read as taken afterwards. A booking that confirms
     # but leaves the seat available is the signature of a lost write.
     after = expect("verify", "GET", f"/api/shows/{show['id']}/seats", 200)
-    state = next((s for s in after.get("seats", []) if s["id"] == seat), None)
-    if state is None or state.get("status") == "available":
+    seat_state = next((s for s in after.get("seats", []) if s["id"] == seat), None)
+    if seat_state is None or seat_state.get("status") == "available":
         raise ProbeFailure(
             "verify",
             f"Seat {seat} still reads as available after booking {reference}",
-            f"seat state after booking: {json.dumps(state)}",
+            f"seat state after booking: {json.dumps(seat_state)}",
             "LOST_WRITE",
         )
-    trace.append(f"verify: {seat} now {state.get('status')}")
-
-    # Best effort: give the seat back so the probe does not consume inventory.
-    status, _ = api("DELETE", f"/api/bookings/{reference}")
-    trace.append(f"cleanup: cancel returned {status}")
+    trace.append(f"verify: {seat} now {seat_state.get('status')}")
 
     return trace
 
@@ -314,7 +381,7 @@ def report(failure: ProbeFailure, trace: list[str]) -> None:
 def main() -> int:
     trace: list[str] = []
     try:
-        trace = journey()
+        journey(trace)
     except ProbeFailure as failure:
         print(f"FAIL [{failure.step}] {failure.summary}")
         print(f"  fingerprint: fp-{failure.fingerprint}")
