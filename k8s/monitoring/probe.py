@@ -17,7 +17,9 @@ import hashlib
 import json
 import os
 import random
+import signal
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -46,6 +48,10 @@ MIN_LEAD_TIME = timedelta(hours=6)
 
 # How many different seats to try before treating contention as a real fault.
 SEAT_ATTEMPTS = int(os.environ.get("PROBE_SEAT_ATTEMPTS", "3"))
+
+# Seconds between passes. Zero runs a single pass and exits (CronJob style).
+INTERVAL = float(os.environ.get("PROBE_INTERVAL_SECONDS", "0"))
+CLEANUP_ATTEMPTS = int(os.environ.get("PROBE_CLEANUP_ATTEMPTS", "4"))
 
 
 class ProbeFailure(Exception):
@@ -144,11 +150,27 @@ def release(state: dict, trace: list[str]) -> None:
     second ticket, and the probe would eat a seat a minute.
     """
     if state.get("booking"):
-        status, _ = api("DELETE", f"/api/bookings/{state['booking']}")
+        status = give_back("DELETE", f"/api/bookings/{state['booking']}")
         trace.append(f"cleanup: cancelled {state['booking']} ({status})")
     elif state.get("hold"):
-        status, _ = api("DELETE", f"/api/holds/{state['hold']}")
+        status = give_back("DELETE", f"/api/holds/{state['hold']}")
         trace.append(f"cleanup: released hold ({status})")
+
+
+def give_back(method: str, path: str) -> str:
+    """Hand a seat back, retrying a few times.
+
+    Worth retrying rather than shrugging off: a cancel that never lands
+    leaves the seat sold for good, and the probe would eat the auditorium a
+    seat at a time.
+    """
+    last = 0
+    for _ in range(CLEANUP_ATTEMPTS):
+        last, _payload = api(method, path)
+        if 200 <= last < 300:
+            return str(last)
+        time.sleep(0.3)
+    return f"{last} FAILED after {CLEANUP_ATTEMPTS} attempts"
 
 
 def _journey(trace: list[str], state: dict) -> list[str]:
@@ -387,21 +409,47 @@ def report(failure: ProbeFailure, trace: list[str]) -> None:
     print(f"jira: opened {key}" if key else "jira: could not open an issue")
 
 
-def main() -> int:
+def run_once() -> int:
     trace: list[str] = []
+    stamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
     try:
         journey(trace)
     except ProbeFailure as failure:
-        print(f"FAIL [{failure.step}] {failure.summary}")
+        print(f"{stamp} FAIL [{failure.step}] {failure.summary}", flush=True)
         print(f"  fingerprint: fp-{failure.fingerprint}")
         print(f"  detail: {failure.detail}")
         for line in trace:
             print(f"  completed: {line}")
         report(failure, trace)
         return 1
-    print(f"OK {ENVIRONMENT}: booking journey completed")
+    except Exception as exc:  # never let one bad run kill a long-lived probe
+        print(f"{stamp} ERROR unexpected: {type(exc).__name__}: {exc}", flush=True)
+        return 1
+    print(f"{stamp} OK {ENVIRONMENT}: booking journey completed", flush=True)
     for line in trace:
         print(f"  {line}")
+    return 0
+
+
+def main() -> int:
+    # A Kubernetes CronJob cannot schedule more often than once a minute, so
+    # anything faster runs as a long-lived loop instead of one pod per pass.
+    if INTERVAL <= 0:
+        return run_once()
+
+    print(f"probe: every {INTERVAL}s against {BASE}", flush=True)
+    stopping = {"now": False}
+    signal.signal(signal.SIGTERM, lambda *_: stopping.__setitem__("now", True))
+    signal.signal(signal.SIGINT, lambda *_: stopping.__setitem__("now", True))
+
+    while not stopping["now"]:
+        started = time.monotonic()
+        run_once()
+        # Pace from the start of each pass so a slow run does not push the
+        # schedule out, and wake often enough to shut down promptly.
+        while not stopping["now"] and time.monotonic() - started < INTERVAL:
+            time.sleep(0.5)
+    print("probe: stopping", flush=True)
     return 0
 
 
