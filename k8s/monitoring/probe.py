@@ -267,6 +267,12 @@ def adf(paragraphs: list[str]) -> dict:
     }
 
 
+# Returned when the duplicate check could not be carried out at all. Kept
+# distinct from "no open ticket": if we cannot tell, filing anyway would open
+# a fresh ticket on every run for as long as Jira search stays unhappy.
+SEARCH_FAILED = object()
+
+
 def jira_find_open(fingerprint: str):
     jql = (
         f'project = "{JIRA_PROJECT}" AND labels = "fp-{fingerprint}" '
@@ -284,9 +290,9 @@ def jira_find_open(fingerprint: str):
             + urllib.parse.urlencode({"jql": jql, "fields": "updated,status", "maxResults": 5}),
             auth=jira_auth(),
         )
-    if status >= 300:
+    if status >= 300 or status == 0:
         print(f"jira: search failed ({status}): {json.dumps(payload)[:300]}", file=sys.stderr)
-        return None
+        return SEARCH_FAILED
     issues = payload.get("issues") or []
     return issues[0] if issues else None
 
@@ -366,6 +372,9 @@ def report(failure: ProbeFailure, trace: list[str]) -> None:
         print(f"jira: DRY_RUN, would file fp-{failure.fingerprint}: {failure.summary}")
         return
     existing = jira_find_open(failure.fingerprint)
+    if existing is SEARCH_FAILED:
+        print("jira: cannot confirm whether this is already filed, leaving it alone")
+        return
     if existing:
         key = existing["key"]
         if stale(existing):
