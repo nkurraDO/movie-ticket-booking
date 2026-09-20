@@ -8,10 +8,13 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - netpol.yaml
+  - rbac.yaml
   - deployment.yaml
+  - traffic-deployment.yaml
 
 configMapGenerator:
   - name: booking-journey-probe-script
     namespace: monitoring
     files:
       - probe.py
+      - traffic.py

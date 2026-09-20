@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traffic-watcher
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: traffic-watcher
+    app.kubernetes.io/part-of: movie-ticket-booking
+---
+# Scoped to reading the ingress controller's logs and nothing else. The
+# access log is the only place the status of real customer traffic exists,
+# since this controller build exports no per-request metrics.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: read-ingress-logs
+  namespace: ingress-nginx
+  labels:
+    app.kubernetes.io/name: traffic-watcher
+    app.kubernetes.io/part-of: movie-ticket-booking
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: traffic-watcher-read-ingress-logs
+  namespace: ingress-nginx
+  labels:
+    app.kubernetes.io/name: traffic-watcher
+    app.kubernetes.io/part-of: movie-ticket-booking
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-ingress-logs
+subjects:
+  - kind: ServiceAccount
+    name: traffic-watcher
+    namespace: monitoring

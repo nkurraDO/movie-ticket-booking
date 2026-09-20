@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-watcher
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: traffic-watcher
+    app.kubernetes.io/part-of: movie-ticket-booking
+spec:
+  replicas: 1
+  # Two watchers reading the same log would each raise the same failure.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traffic-watcher
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: traffic-watcher
+    spec:
+      serviceAccountName: traffic-watcher
+      # Needed here, unlike the probe: reading the ingress log goes through
+      # the Kubernetes API and requires the projected token.
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: watcher
+          image: python:3.12-alpine
+          command: ["python3", "-u", "/probe/traffic.py"]
+          env:
+            - name: ENVIRONMENT
+              value: production
+            - name: TRAFFIC_POLL_SECONDS
+              value: "10"
+            # Only the API path. A 5xx on a static asset is a different
+            # problem, and the SPA serves index.html for unknown paths so
+            # scanner traffic never shows up as an error anyway.
+            - name: TRAFFIC_PATH_PREFIX
+              value: /api
+            - name: TRAFFIC_MIN_STATUS
+              value: "500"
+            - name: JIRA_ISSUE_TYPE
+              value: Bug
+            - name: JIRA_PROJECT_KEY
+              value: MARSOHS
+            - name: JIRA_EPIC_KEY
+              value: MARSOHS-1433
+            - name: JIRA_LABEL
+              value: ops-oncall
+            - name: JIRA_RENOTIFY_MINUTES
+              value: "30"
+          envFrom:
+            - secretRef:
+                name: jira-credentials
+                optional: true
+          resources:
+            requests:
+              cpu: 20m
+              memory: 48Mi
+            limits:
+              cpu: 300m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: probe
+              mountPath: /probe
+              readOnly: true
+      volumes:
+        - name: probe
+          configMap:
+            name: booking-journey-probe-script
