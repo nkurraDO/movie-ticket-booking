@@ -55,12 +55,17 @@ CLEANUP_ATTEMPTS = int(os.environ.get("PROBE_CLEANUP_ATTEMPTS", "4"))
 
 
 class ProbeFailure(Exception):
-    def __init__(self, step: str, summary: str, detail: str, code: str):
+    def __init__(self, step: str, summary: str, detail: str, code: str, headline: str = ""):
         super().__init__(summary)
         self.step = step
         self.summary = summary
         self.detail = detail
         self.code = code
+        # Ticket title. The traffic watcher reuses this class and needs to say
+        # something other than "the booking journey failed".
+        self.headline = headline or f"Booking journey failing at '{step}': {summary}"
+        self.detail_intro = "The synthetic customer-journey probe could not complete a booking."
+        self.trace_label = "Steps completed before the failure:"
 
     @property
     def fingerprint(self) -> str:
@@ -323,18 +328,18 @@ def jira_create(failure: ProbeFailure, trace: list[str]) -> str | None:
     fields = {
         "project": {"key": JIRA_PROJECT},
         "issuetype": {"name": JIRA_ISSUE_TYPE},
-        "summary": f"[{ENVIRONMENT}] Booking journey failing at '{failure.step}': {failure.summary}",
+        "summary": f"[{ENVIRONMENT}] {failure.headline}",
         # fp-* is what makes deduplication work: it is how a later run
         # recognises that this exact failure already has an open ticket.
         "labels": [JIRA_LABEL, f"env-{ENVIRONMENT}", f"fp-{failure.fingerprint}"],
     }
     fields["description"] = adf([
-        "The synthetic customer-journey probe could not complete a booking.",
+        failure.detail_intro,
         f"Environment: {ENVIRONMENT}",
         f"Failing step: {failure.step}",
         f"Observed: {failure.summary}",
         f"Response: {failure.detail}",
-        "Steps completed before the failure:",
+        failure.trace_label,
         "\n".join(trace) if trace else "(none - failed on the first call)",
         f"Probe target: {BASE}",
         f"Detected at: {datetime.now(timezone.utc).isoformat()}",
