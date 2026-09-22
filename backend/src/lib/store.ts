@@ -10,6 +10,19 @@ const HOLD_TTL_MS = Number(process.env.SEAT_HOLD_TTL_MS ?? 5 * 60 * 1000);
 export const MAX_SEATS_PER_BOOKING = Number(process.env.MAX_SEATS_PER_BOOKING ?? 10);
 
 /**
+ * How many days ahead of today showtimes are seeded for. Rolling forward
+ * with the calendar keeps the catalogue bookable however long the pod lives.
+ */
+export const SHOW_HORIZON_DAYS = Number(process.env.SHOW_HORIZON_DAYS ?? 3);
+
+/**
+ * How often the show horizon is re-extended. Hourly is far more often than
+ * the daily cadence that strictly requires, but keeps the window right in
+ * the face of clock skew or missed ticks.
+ */
+export const SHOW_REFRESH_MS = Number(process.env.SHOW_REFRESH_MS ?? 60 * 60 * 1000);
+
+/**
  * How long before a show starts online sales close, in minutes.
  *
  * Walk-ins are seated from the box office in the last minutes before a show,
@@ -86,8 +99,31 @@ export class Store {
   private readonly availabilityLog: AvailabilitySnapshot[] = [];
   private bookingQueue: Promise<void> = Promise.resolve();
 
+  /**
+   * Showtimes are generated for SHOW_HORIZON_DAYS starting today, but only
+   * once at process start. Without a refresh the horizon expires once the
+   * pod has been up longer than the horizon, and no show is far enough in
+   * the future to be bookable (MARSOHS-1665). Re-extend it periodically.
+   */
+  private readonly showRefreshTimer: NodeJS.Timeout;
+
   constructor() {
-    for (const show of buildShows()) {
+    this.extendShowHorizon();
+    this.showRefreshTimer = setInterval(() => this.extendShowHorizon(), SHOW_REFRESH_MS);
+    // The timer must never keep the process alive on its own; the HTTP
+    // server does that for as long as it is meant to run.
+    this.showRefreshTimer.unref();
+  }
+
+  /**
+   * Adds any missing shows for the coming SHOW_HORIZON_DAYS days. Show ids
+   * are derived from the calendar day, so re-running for a day that is
+   * already seeded is a no-op, and older shows (with their bookings and
+   * occupancy) are left untouched.
+   */
+  private extendShowHorizon(now = new Date()): void {
+    for (const show of buildShows(now, SHOW_HORIZON_DAYS)) {
+      if (this.shows.has(show.id)) continue;
       this.shows.set(show.id, show);
       this.occupancy.set(show.id, new Map());
     }
