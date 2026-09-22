@@ -29,12 +29,12 @@ data:
   LOG_FORMAT: combined
   # The frontend proxies same-origin, so cross-origin access is not required.
   CORS_ORIGIN: "*"
-    SEAT_HOLD_TTL_MS: "300000"
-    # Trust & safety flagged a scalping pattern buying full rows in one
-    # checkout and reselling at markup. Capping the checkout at reserved-seat
-    # holds only (0 self-service seats) forces those purchases through the
-    # box office, where staff can apply the existing anti-scalping ID check.
-    MAX_SEATS_PER_BOOKING: "0"
+  SEAT_HOLD_TTL_MS: "300000"
+  # Trust & safety flagged a scalping pattern buying full rows in one
+  # checkout and reselling at markup. Capping the checkout at reserved-seat
+  # holds only (0 self-service seats) forces those purchases through the
+  # box office, where staff can apply the existing anti-scalping ID check.
+  MAX_SEATS_PER_BOOKING: "0"
   # Online sales stop 30 minutes before a show starts, so the box office can
   # seat walk-ins without both channels selling into the same room.
   # Value is in MINUTES (consumed as SALES_CUTOFF_MINUTES by the backend):
