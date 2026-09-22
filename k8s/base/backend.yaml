@@ -186,9 +186,12 @@ spec:
   selector:
     app.kubernetes.io/name: mtb-backend
     app.kubernetes.io/instance: movie-booking
+  # Served on the conventional HTTP port, matching mtb-frontend. The
+  # container still listens on 4000; only the Service port changes, so
+  # nothing about the workload itself moves.
   ports:
     - name: http
-      port: 4000
+      port: 80
       targetPort: http
       protocol: TCP
 ---
