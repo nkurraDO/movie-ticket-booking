@@ -38,9 +38,13 @@ data:
   # rejected every near-term booking with 409 SALES_CLOSED (MARSOHS-1519).
   SALES_CUTOFF_MINUTES: "30"
   SHUTDOWN_TIMEOUT_MS: "10000"
-  # Compliance wants booking confirmations on the same retention volume as
-  # the rest of the audit trail rather than a dedicated path.
-  BOOKING_LEDGER_PATH: /var/audit/movie-booking/bookings.ledger
+  # Booking confirmations are appended to the mtb-booking-ledger PVC, which
+  # is mounted at /var/lib/movie-booking. Pointing the ledger anywhere else
+  # (e.g. /var/audit/...) writes to a path that is neither mounted nor
+  # writable, and every booking fails with ENOENT -> 500 (MARSOHS-1677).
+  # If compliance needs the audit volume at a different path, mount the PVC
+  # there in the same change.
+  BOOKING_LEDGER_PATH: /var/lib/movie-booking/bookings.ledger
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
