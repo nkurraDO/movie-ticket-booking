@@ -16,7 +16,7 @@ RUN npm run build
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 
 # Where nginx forwards /api. Overridden per environment.
-ENV BACKEND_URL=http://mtb-backend:4000 \
+ENV BACKEND_URL=http://mtb-backend:80 \
     NGINX_ENVSUBST_FILTER='^(BACKEND_URL|DNS_RESOLVER)$'
 
 COPY --chown=nginx:nginx nginx/default.conf.template /etc/nginx/templates/default.conf.template

@@ -24,10 +24,11 @@ data:
   # Cluster DNS name of the backend Service. This is the only coupling
   # between the two services.
   #
-  # Reverted to the unversioned name: no mtb-backend-v2 Service exists in the
-  # cluster, so every /api request failed DNS resolution and returned 503
-  # (MARSOHS-1602). Reintroduce the v2 name only alongside the v2 Service.
-  BACKEND_URL: http://mtb-backend.movie-booking.svc.cluster.local:4000
+  # Port 80: the mtb-backend Service was moved to the conventional HTTP port
+  # (its container still listens on 4000 behind targetPort). Pointing at :4000
+  # hit a port the Service no longer serves, so every /api request timed out
+  # and the frontend returned 503 (MARSOHS-1674).
+  BACKEND_URL: http://mtb-backend.movie-booking.svc.cluster.local:80
 ---
 apiVersion: apps/v1
 kind: Deployment
