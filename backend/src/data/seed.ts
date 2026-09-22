@@ -77,9 +77,12 @@ export const theaters: Theater[] = [
 
 /**
  * Shows are generated relative to process start so the catalogue always has
- * upcoming showtimes, no matter when the container is launched.
+ * upcoming showtimes, no matter when the container is launched. They are
+ * seeded for `horizonDays` starting today, and ids encode the calendar day
+ * so re-seeding the same day is idempotent and the horizon can roll forward
+ * without disturbing shows that are already on sale.
  */
-export function buildShows(now = new Date()): Show[] {
+export function buildShows(now = new Date(), horizonDays = 3): Show[] {
   const shows: Show[] = [];
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
@@ -88,7 +91,7 @@ export function buildShows(now = new Date()): Show[] {
   const slotHours = [11, 14.5, 18, 21.25];
 
   movies.forEach((movie, movieIndex) => {
-    for (let dayOffset = 0; dayOffset < 3; dayOffset++) {
+    for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
       slotHours.forEach((slot, slotIndex) => {
         const theater = theaters[(movieIndex + slotIndex) % theaters.length]!;
         const startsAt = new Date(startOfToday);
@@ -99,9 +102,12 @@ export function buildShows(now = new Date()): Show[] {
         // Skip showtimes that have already started today.
         if (startsAt.getTime() <= now.getTime()) return;
 
+        // The date in the id makes re-seeding a day idempotent and keeps ids
+        // stable across horizon refreshes, so bookings keep resolving.
+        const date = startsAt.toISOString().slice(0, 10);
         const isPrimeTime = Math.floor(slot) >= 18;
         shows.push({
-          id: `show-${movie.id}-${dayOffset}-${slotIndex}`,
+          id: `show-${movie.id}-${date}-${slotIndex}`,
           movieId: movie.id,
           theaterId: theater.id,
           screen: `Screen ${(slotIndex % 3) + 1}`,
