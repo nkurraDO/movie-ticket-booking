@@ -27,6 +27,9 @@ data:
   SERVICE_NAME: mtb-backend
   PORT: "4000"
   LOG_FORMAT: combined
+  # Auditoriums are being upgraded to 4DX for the holiday slate; the seat map
+  # will show the projection format once the rollout reaches this cluster.
+  DEFAULT_SCREEN_FORMAT: "4DX"
   # The frontend proxies same-origin, so cross-origin access is not required.
   CORS_ORIGIN: "*"
   SEAT_HOLD_TTL_MS: "300000"

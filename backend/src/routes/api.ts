@@ -84,6 +84,16 @@ api.get(
   }),
 );
 
+// Auditorium format shown on the seat map, e.g. "Dolby Atmos" rather than the
+// raw config key. Kept here rather than in the theater seed data because it
+// is a per-show projection setting, not a fixed property of the room.
+const SCREEN_FORMAT_LABELS: Record<string, string> = {
+  STANDARD: 'Standard',
+  IMAX: 'IMAX',
+  DOLBY: 'Dolby Atmos',
+};
+const DEFAULT_SCREEN_FORMAT = process.env.DEFAULT_SCREEN_FORMAT ?? 'STANDARD';
+
 api.get(
   '/shows/:id/seats',
   handle((req, res) => {
@@ -93,6 +103,7 @@ api.get(
       movie,
       theater,
       seats,
+      screenFormat: SCREEN_FORMAT_LABELS[DEFAULT_SCREEN_FORMAT].toUpperCase(),
       maxSeatsPerBooking: MAX_SEATS_PER_BOOKING,
       available: seats.filter((s) => s.status === 'available').length,
     });
