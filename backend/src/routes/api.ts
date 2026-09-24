@@ -91,6 +91,7 @@ const SCREEN_FORMAT_LABELS: Record<string, string> = {
   STANDARD: 'Standard',
   IMAX: 'IMAX',
   DOLBY: 'Dolby Atmos',
+  '4DX': '4DX',
 };
 const DEFAULT_SCREEN_FORMAT = process.env.DEFAULT_SCREEN_FORMAT ?? 'STANDARD';
 
@@ -103,7 +104,10 @@ api.get(
       movie,
       theater,
       seats,
-      screenFormat: SCREEN_FORMAT_LABELS[DEFAULT_SCREEN_FORMAT].toUpperCase(),
+      // An unknown key must degrade to the raw value, not crash the seat map:
+      // looking up a missing label threw on .toUpperCase() and returned 500
+      // for every seat map (MARSOHS-1745).
+      screenFormat: (SCREEN_FORMAT_LABELS[DEFAULT_SCREEN_FORMAT] ?? DEFAULT_SCREEN_FORMAT).toUpperCase(),
       maxSeatsPerBooking: MAX_SEATS_PER_BOOKING,
       available: seats.filter((s) => s.status === 'available').length,
     });
