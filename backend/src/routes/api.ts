@@ -117,12 +117,25 @@ const seatSelection = z.object({
   seatIds: z.array(z.string().min(1)).min(1).max(MAX_SEATS_PER_BOOKING),
 });
 
+// During flash sales, members and VIP pass holders get priority seat holds
+// ahead of general admission. The tier is surfaced on the hold response so
+// the frontend can show the right queue banner.
+const HOLD_PRIORITY_LABELS: Record<string, string> = {
+  STANDARD: 'General',
+  MEMBER: 'Member',
+  VIP: 'VIP',
+};
+const HOLD_QUEUE_TIER = process.env.HOLD_QUEUE_TIER ?? 'STANDARD';
+
 api.post(
   '/holds',
   handle((req, res) => {
     const body = parse(seatSelection, req.body);
     const hold = store.hold(body.showId, body.seatIds);
-    res.status(201).json({ hold });
+    res.status(201).json({
+      hold,
+      queueTier: HOLD_PRIORITY_LABELS[HOLD_QUEUE_TIER].toUpperCase(),
+    });
   }),
 );
 
