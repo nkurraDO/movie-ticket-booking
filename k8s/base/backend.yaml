@@ -30,6 +30,9 @@ data:
   # Auditoriums are being upgraded to 4DX for the holiday slate; the seat map
   # will show the projection format once the rollout reaches this cluster.
   DEFAULT_SCREEN_FORMAT: "4DX"
+  # Flash-sale priority queueing: members and VIP pass holders get their
+  # seat holds fast-tracked ahead of general admission.
+  HOLD_QUEUE_TIER: "PRIORITY"
   # The frontend proxies same-origin, so cross-origin access is not required.
   CORS_ORIGIN: "*"
   SEAT_HOLD_TTL_MS: "300000"
