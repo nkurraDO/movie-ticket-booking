@@ -23,6 +23,17 @@ export const SHOW_HORIZON_DAYS = Number(process.env.SHOW_HORIZON_DAYS ?? 3);
 export const SHOW_REFRESH_MS = Number(process.env.SHOW_REFRESH_MS ?? 60 * 60 * 1000);
 
 /**
+ * How many days past its start a show is kept before it is pruned, along
+ * with its occupancy and any bookings that reference it. Without pruning,
+ * past shows and their bookings accumulate forever: the probe alone books
+ * and cancels a seat every ten seconds, and after three weeks the process
+ * had grown past its 256Mi limit and was OOMKilled mid-traffic
+ * (MARSOHS-2263). Confirmed bookings stay on the ledger volume for
+ * finance; only the in-memory working set is bounded.
+ */
+export const PRUNE_PAST_DAYS = Number(process.env.PRUNE_PAST_DAYS ?? 1);
+
+/**
  * How long before a show starts online sales close, in minutes.
  *
  * Walk-ins are seated from the box office in the last minutes before a show,
@@ -126,6 +137,28 @@ export class Store {
       if (this.shows.has(show.id)) continue;
       this.shows.set(show.id, show);
       this.occupancy.set(show.id, new Map());
+    }
+    this.prunePastShows(now);
+  }
+
+  /**
+   * Drops shows that started more than PRUNE_PAST_DAYS ago, together with
+   * their occupancy maps and bookings. Past shows are not bookable and only
+   * keep the in-memory store growing (MARSOHS-2263); the ledger volume keeps
+   * the financial record of every confirmed booking.
+   */
+  private prunePastShows(now = new Date()): void {
+    const cutoff = now.getTime() - PRUNE_PAST_DAYS * 24 * 60 * 60 * 1000;
+    for (const [id, show] of this.shows) {
+      if (new Date(show.startsAt).getTime() >= cutoff) continue;
+      this.shows.delete(id);
+      this.occupancy.delete(id);
+    }
+    for (const [reference, booking] of this.bookings) {
+      if (!this.shows.has(booking.showId)) this.bookings.delete(reference);
+    }
+    for (const [id, hold] of this.holds) {
+      if (!this.shows.has(hold.showId)) this.holds.delete(id);
     }
   }
 
