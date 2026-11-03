@@ -61,11 +61,25 @@ app.use((_req, res) => {
   res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } });
 });
 
-app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err instanceof BookingError) {
     res.status(err.status).json({
       error: { code: err.code, message: err.message, details: err.details },
     });
+    return;
+  }
+  // A malformed or oversized request body is the client's fault, not the
+  // server's. Body-parser surfaces these as SyntaxError/limit errors, which
+  // used to fall through to 500 INTERNAL_ERROR: scanner traffic posting
+  // garbage JSON then registered as a server fault and paged on-call as
+  // customer impact (MARSOHS-2650). Classify them as client errors so the
+  // 5xx signal stays meaningful.
+  if (err?.type === 'entity.parse.failed') {
+    res.status(400).json({ error: { code: 'INVALID_JSON', message: 'Request body is not valid JSON' } });
+    return;
+  }
+  if (err?.type === 'entity.too.large') {
+    res.status(413).json({ error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body exceeds the size limit' } });
     return;
   }
   console.error('[unhandled]', err);
